@@ -1,11 +1,11 @@
 from sentence_transformers import SentenceTransformer
 import chromadb
+import os
 
-# Load the embedding model once (reused across calls)
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# Initialize ChromaDB client (stores data locally)
-client = chromadb.PersistentClient(path="./chroma_db")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+client = chromadb.PersistentClient(path=os.path.join(BASE_DIR, "chroma_db"))
 
 def get_or_create_collection(collection_name="research_papers"):
     collection = client.get_or_create_collection(name=collection_name)
@@ -14,7 +14,6 @@ def get_or_create_collection(collection_name="research_papers"):
 def embed_and_store(chunks, collection_name="research_papers"):
     collection = get_or_create_collection(collection_name)
     
-    # Clear old data so each new PDF starts fresh
     client.delete_collection(collection_name)
     collection = client.get_or_create_collection(collection_name)
     

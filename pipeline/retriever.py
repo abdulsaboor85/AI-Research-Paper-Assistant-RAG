@@ -1,8 +1,11 @@
 from sentence_transformers import SentenceTransformer
 import chromadb
+import os
 
 model = SentenceTransformer("all-MiniLM-L6-v2")
-client = chromadb.PersistentClient(path="./chroma_db")
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+client = chromadb.PersistentClient(path=os.path.join(BASE_DIR, "chroma_db"))
 
 def retrieve_relevant_chunks(query, collection_name="research_papers", top_k=5):
     collection = client.get_or_create_collection(collection_name)

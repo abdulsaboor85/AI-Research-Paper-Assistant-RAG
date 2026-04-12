@@ -1,12 +1,10 @@
-import google.generativeai as genai
 import os
 from dotenv import load_dotenv
+import google.genai as genai
 
 load_dotenv()
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-
-model = genai.GenerativeModel("gemini-1.5-flash")
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 def answer_question(question, context_chunks):
     context = "\n\n".join(context_chunks)
@@ -22,5 +20,8 @@ Question: {question}
 
 Answer:"""
     
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
+    )
     return response.text.strip()
