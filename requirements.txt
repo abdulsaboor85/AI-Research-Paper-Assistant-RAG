@@ -1,0 +1,11 @@
+pymupdf
+pdfplumber
+langchain
+langchain-community
+langchain-text-splitters
+chromadb
+sentence-transformers
+google-generativeai
+flask
+flask-cors
+python-dotenv
