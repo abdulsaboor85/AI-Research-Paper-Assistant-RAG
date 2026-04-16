@@ -1,3 +1,11 @@
+import sys
+import os
+
+# Fix all paths regardless of where you run from
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+os.chdir(BASE_DIR)
+
 from extractor import extract_text
 from chunker import chunk_text
 from embedder import embed_and_store
@@ -25,10 +33,7 @@ def ask(question):
     
     return answer
 
-# Quick test — run this file directly to verify everything works
 if __name__ == "__main__":
-    import sys
-    
     if len(sys.argv) < 2:
         print("Usage: python pipeline.py <path_to_pdf>")
         sys.exit(1)
