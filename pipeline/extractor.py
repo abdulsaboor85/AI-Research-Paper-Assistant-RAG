@@ -1,4 +1,4 @@
-import fitz  # PyMuPDF
+import fitz
 import pdfplumber
 
 def extract_text_pymupdf(pdf_path):
@@ -20,9 +20,8 @@ def extract_text_pdfplumber(pdf_path):
 
 def extract_text(pdf_path):
     text = extract_text_pymupdf(pdf_path)
-    
-    # If PyMuPDF gives very little text, fall back to pdfplumber
+
     if len(text.strip()) < 100:
         text = extract_text_pdfplumber(pdf_path)
-    
+
     return text.strip()
