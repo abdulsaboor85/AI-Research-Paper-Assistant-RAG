@@ -10,3 +10,4 @@ flask
 flask-cors
 python-dotenv
 wordfreq
+

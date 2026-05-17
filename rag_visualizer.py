@@ -30,9 +30,10 @@ load_dotenv()
 sys.path.append(os.path.join(os.path.dirname(__file__), "pipeline"))
 
 from sentence_transformers import SentenceTransformer
+import google.genai as genai
 from model_config import GEMINI_MODEL_POOL, MAX_RETRIES_PER_MODEL, RETRY_DELAY_SECONDS
-from google import genai
 
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 TOP_K            = 3
@@ -103,11 +104,38 @@ def cosine_similarity(a, b) -> float:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Calculate detailed similarity breakdown (for visualization)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def calculate_similarity_breakdown(question_vec, chunk_vec):
+    """
+    Calculate detailed similarity breakdown:
+    - Dot product
+    - Norms
+    - Final cosine similarity score
+    """
+    q_vec_arr = np.array(question_vec)
+    c_vec_arr = np.array(chunk_vec)
+    
+    dot_product = float(np.dot(q_vec_arr, c_vec_arr))
+    q_norm = float(np.linalg.norm(q_vec_arr))
+    c_norm = float(np.linalg.norm(c_vec_arr))
+    similarity = dot_product / (q_norm * c_norm)
+    
+    return {
+        "dot_product": round(dot_product, 6),
+        "question_norm": round(q_norm, 6),
+        "chunk_norm": round(c_norm, 6),
+        "similarity_score": round(similarity, 6),
+        "formula_breakdown": f"cos(θ) = {round(dot_product, 6)} / ({round(q_norm, 6)} × {round(c_norm, 6)}) = {round(similarity, 6)}"
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  LLM Call  (shared model pool from model_config.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def call_llm(question: str, top_chunks: list) -> tuple:
-    client  = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
     context = "\n\n".join(
         f"[Chunk {i+1}]:\n{chunk}"
         for i, chunk in enumerate(top_chunks)
@@ -128,9 +156,9 @@ Answer:"""
         for attempt in range(1, MAX_RETRIES_PER_MODEL + 1):
             try:
                 response = client.models.generate_content(
-                    model    = model_name,
-                    contents = prompt,
-                    config   = {"max_output_tokens": 1024}
+                    model=model_name,
+                    contents=prompt,
+                    config={"max_output_tokens": 1024}
                 )
                 print(f"  ✓  [{model_name}] answered successfully")
                 return response.text.strip(), model_name
@@ -195,12 +223,20 @@ def run(pdf_path: str, question: str):
     q_vec = embed_model.encode(question)
     print(f"         Question → 384-dim vector\n")
 
-    # ── STEP 5: Cosine similarity ─────────────────────────────────
-    print("  [6/7]  Computing cosine similarities...")
+    # ── STEP 5: Cosine similarity with detailed breakdown ────────────
+    print("  [6/7]  Computing cosine similarities with formula breakdown...")
     similarities = []
+    similarity_details = []
+    
     for i, (chunk, c_vec) in enumerate(zip(chunks, chunk_vectors)):
         sim = cosine_similarity(q_vec, c_vec)
+        breakdown = calculate_similarity_breakdown(q_vec, c_vec)
         similarities.append((sim, i, chunk, c_vec.tolist()))
+        similarity_details.append({
+            "chunk_index": i + 1,
+            "chunk_text": chunk[:100],
+            "breakdown": breakdown
+        })
 
     ranked = sorted(similarities, key=lambda x: x[0], reverse=True)
     top_k  = ranked[:TOP_K]
@@ -253,7 +289,33 @@ def run(pdf_path: str, question: str):
             "norm":    float(np.linalg.norm(q_vec)),
         },
 
-        # Step 5 — all similarities ranked
+        # Step 5A — Vector comparison for each chunk (ENHANCED)
+        "vector_comparisons": [
+            {
+                "chunk_index": detail["chunk_index"],
+                "chunk_text": detail["chunk_text"],
+                "question_vector_preview": q_vec[:VECTOR_PREVIEW].tolist(),
+                "question_vector_norm": float(np.linalg.norm(q_vec)),
+                "chunk_vector_preview": similarities[detail["chunk_index"] - 1][3][:VECTOR_PREVIEW],
+                "chunk_vector_norm": float(np.linalg.norm(np.array(similarities[detail["chunk_index"] - 1][3]))),
+            }
+            for detail in similarity_details
+        ],
+
+        # Step 5B — Similarity calculation breakdown (ENHANCED)
+        "similarity_calculations": [
+            {
+                "chunk_index": detail["chunk_index"],
+                "dot_product": detail["breakdown"]["dot_product"],
+                "question_norm": detail["breakdown"]["question_norm"],
+                "chunk_norm": detail["breakdown"]["chunk_norm"],
+                "formula": detail["breakdown"]["formula_breakdown"],
+                "final_score": detail["breakdown"]["similarity_score"],
+            }
+            for detail in similarity_details
+        ],
+
+        # Step 5C — all similarities ranked
         "similarities_ranked": [
             {
                 "rank":        rank + 1,
