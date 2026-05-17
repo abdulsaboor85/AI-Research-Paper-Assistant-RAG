@@ -302,8 +302,8 @@ async function generateReport(jsonPath, docxPath) {
     })
   );
 
-  // Show detailed comparison for top chunks
-  data.vector_comparisons.slice(0, Math.min(5, data.vector_comparisons.length)).forEach((comparison) => {
+  // Show detailed comparison for all chunks
+  data.vector_comparisons.forEach((comparison) => {
     sections.push(
       new Paragraph({
         text: `Chunk ${comparison.chunk_index}: "${comparison.chunk_text.substring(0, 60)}..."`,
@@ -414,8 +414,8 @@ async function generateReport(jsonPath, docxPath) {
     })
   );
 
-  // Show calculations for top chunks
-  data.similarity_calculations.slice(0, Math.min(5, data.similarity_calculations.length)).forEach((calc) => {
+  // Show calculations for all chunks
+  data.similarity_calculations.forEach((calc) => {
     sections.push(
       new Paragraph({
         text: `Chunk ${calc.chunk_index}:`,
@@ -619,7 +619,7 @@ async function generateReport(jsonPath, docxPath) {
   );
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // CREATE DOCUMENT
+  // CREATE DOCUMENT (FIXED API - Use Packer.toBuffer)
   // ─────────────────────────────────────────────────────────────────────────────
   const doc = new Document({
     sections: [
@@ -629,10 +629,13 @@ async function generateReport(jsonPath, docxPath) {
     ],
   });
 
-  const packer = new Packer();
-  packer.toBuffer(doc).then((buffer) => {
+  // Use Packer.toBuffer (static method) instead of packer.toBuffer (instance method)
+  Packer.toBuffer(doc).then((buffer) => {
     fs.writeFileSync(docxPath, buffer);
     console.log(`✓ Word document generated: ${docxPath}`);
+  }).catch((err) => {
+    console.error(`✗ Error generating document: ${err}`);
+    process.exit(1);
   });
 }
 

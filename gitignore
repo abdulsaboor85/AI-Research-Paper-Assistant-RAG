@@ -1,0 +1,56 @@
+# Environment Variables (DO NOT commit API keys!)
+.env
+.env.local
+.env.*.local
+
+# Python Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Node Modules (can be reinstalled with npm install)
+node_modules/
+npm-debug.log
+package-lock.json
+
+# Vector Database (large, auto-generated)
+chroma_db/
+
+# Generated Files
+rag_data.json
+rag_report.docx
+*.docx
+
+# IDE and Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.sublime-project
+.sublime-workspace
+
+# OS Files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Project Specific
+*.log
+temp/
+tmp/
+uploads/
+downloads/
