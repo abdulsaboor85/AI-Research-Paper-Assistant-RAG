@@ -1,22 +1,24 @@
 """
 ====================================================
- PATH  →  analyze_pdf.py   (project root)
+ PATH  ->  src/analyze_pdf.py
 ====================================================
 
 Run from terminal:
-    python analyze_pdf.py "path/to/your/paper.pdf"
+    python src/analyze_pdf.py "path/to/your/paper.pdf"
 
 Example:
-    python analyze_pdf.py "D:/papers/attention_is_all_you_need.pdf"
+    python src/analyze_pdf.py "D:/papers/attention_is_all_you_need.pdf"
 """
 
 import os
 import sys
 from dotenv import load_dotenv
 
-load_dotenv()
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "pipeline"))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
+sys.path.append(os.path.join(PROJECT_ROOT, "pipeline"))
 
 import pdfplumber
 from difficulty_scorer import analyze_difficulty
@@ -62,7 +64,7 @@ def print_result(result: dict, pdf_path: str):
 def main():
     if len(sys.argv) < 2:
         print("\n[ERROR] No PDF path provided.")
-        print("Usage:  python analyze_pdf.py \"path/to/paper.pdf\"\n")
+        print("Usage:  python src/analyze_pdf.py \"path/to/paper.pdf\"\n")
         sys.exit(1)
 
     pdf_path = sys.argv[1]

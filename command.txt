@@ -1,0 +1,101 @@
+AI Research Paper Assistant RAG - Commands
+
+1. Create virtual environment
+
+Windows:
+python -m venv venv
+
+Mac/Linux:
+python3 -m venv venv
+
+
+2. Activate virtual environment
+
+Windows:
+venv\Scripts\activate
+
+Mac/Linux:
+source venv/bin/activate
+
+
+3. Install Python dependencies
+
+python -m pip install -r requirements.txt
+
+Important:
+Run this again whenever requirements.txt changes.
+The difficulty analyzer needs nltk, spacy, wordfreq, and the en_core_sci_sm model.
+
+If you only need to fix the difficulty analyzer missing package error, run:
+python -m pip install nltk spacy wordfreq
+python -m pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_sm-0.5.4.tar.gz
+
+
+4. Install Node.js dependencies
+
+npm install
+
+
+5. Create environment file
+
+Create a file named .env in the project root.
+Add your Gemini API key:
+
+GEMINI_API_KEY=your_api_key_here
+
+
+6. Run full RAG visualization report
+
+python src/rag_visualizer.py "papers/your_paper.pdf" "your question"
+
+Example:
+python src/rag_visualizer.py "papers/easy/cybersecurity_easy.pdf" "what should employees do"
+
+
+
+7. Run paper difficulty analysis
+
+python src/analyze_pdf.py "papers/your_paper.pdf"
+
+Example:
+python src/analyze_pdf.py "papers/easy/cybersecurity_easy.pdf"
+
+
+8. Run interactive Q&A pipeline
+
+python pipeline/pipeline.py "papers/your_paper.pdf"
+
+Example:
+python pipeline/pipeline.py "papers/easy/cybersecurity_easy.pdf"
+
+Then type questions in the terminal.
+Type exit to stop.
+
+
+9. Useful checks
+
+Check Python packages:
+pip list
+
+Check difficulty analyzer imports:
+python -c "import nltk, spacy, wordfreq; spacy.load('en_core_sci_sm'); print('Difficulty dependencies OK')"
+
+Check Node package:
+npm list docx
+
+Check Python syntax:
+python -c "import ast, pathlib; [ast.parse(pathlib.Path(f).read_text(encoding='utf-8')) for f in ['src/rag_visualizer.py','src/analyze_pdf.py','pipeline/pipeline.py']]; print('Python syntax OK')"
+
+Check Node script:
+node --check scripts/rag_report_gen.js
+
+
+10. Project folders
+
+src       - main runnable Python scripts
+pipeline  - RAG pipeline code
+scripts   - helper JavaScript scripts
+docs      - documentation
+papers    - put PDF files here
+reports   - generated Word reports
+assets    - images and visual assets

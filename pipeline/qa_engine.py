@@ -37,7 +37,9 @@ RULES:
 - Use the context to give the most complete and accurate answer possible.
 - If the answer is spread across multiple sections, combine them into one clear answer.
 - If the question is general (like "what is this paper about"), summarize the overall topic, objective, methodology, and findings from the context.
-- Only say "I couldn't find sufficient information in the paper." if the topic is truly not mentioned anywhere in the context.
+- For general summary questions, prioritize title, abstract, introduction, method, experiments, results, and conclusion context. Ignore references unless the user asks about citations.
+- If the context has enough information for a partial answer, provide that partial answer and clearly say which details are not available.
+- Only say "I couldn't find sufficient information in the paper." if the context contains no meaningful information about the paper's topic.
 - Never make up information not present in the context.
 - Be detailed and clear in your answers.
 

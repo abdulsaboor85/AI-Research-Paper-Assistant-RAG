@@ -33,22 +33,22 @@ npm install
 
 ### **Run Full Visualization Pipeline:**
 ```bash
-python rag_visualizer.py "papers/your_paper.pdf" "your question"
+python src/rag_visualizer.py "papers/your_paper.pdf" "your question"
 ```
 
 **Example:**
 ```bash
-python rag_visualizer.py "papers/attention.pdf" "How does attention work?"
+python src/rag_visualizer.py "papers/easy/cybersecurity_easy.pdf" "what should employees do"
 ```
 
-**Output:** Creates `rag_report.docx` with full RAG visualization
+**Output:** Creates `reports/<paper-name>__<question>/rag_report.docx` with full RAG visualization
 
 ---
 
 ### **Run Interactive Q&A:**
 ```bash
 cd pipeline
-python pipeline.py "papers/your_paper.pdf"
+python pipeline.py "../papers/easy/cybersecurity_easy.pdf"
 ```
 
 Then type your questions (type `exit` to quit)
@@ -85,22 +85,21 @@ Node.js package: `docx` (for Word generation)
 
 ```
 AI-Research-Paper-Assistant-RAG/
-├── rag_visualizer.py          ← Main script (run this)
-├── rag_report_gen.js          ← Word doc generator
+├── src/
+│   ├── rag_visualizer.py      ← Main script (run this)
+│   └── analyze_pdf.py         ← Difficulty analyzer
+├── scripts/
+│   └── rag_report_gen.js      ← Word doc generator
+├── docs/                      ← Guides and notes
+├── assets/                    ← Images and visual assets
+├── reports/                   ← Generated reports
+├── pipeline/                  ← RAG pipeline modules
+├── papers/                    ← Put your PDF files here
+├── chroma_db/                 ← Auto-created vector database
 ├── requirements.txt           ← Install with: pip install -r requirements.txt
 ├── package.json               ← Install with: npm install
 ├── .env                       ← Create this! Add: GEMINI_API_KEY=...
-├── .gitignore                 ← Prevents .env from being pushed
-├── pipeline/
-│   ├── pipeline.py            ← Interactive Q&A
-│   ├── qa_engine.py
-│   ├── retriever.py
-│   ├── embedder.py
-│   ├── chunker.py
-│   ├── extractor.py
-│   └── model_config.py
-├── papers/                    ← Put your PDF files here
-└── chroma_db/                 ← Auto-created vector database
+└── .gitignore                 ← Prevents .env from being pushed
 ```
 
 ---
@@ -125,10 +124,10 @@ npm install
 # (Put your PDF in the papers/ folder)
 
 # Step 5: Run!
-python rag_visualizer.py "papers/your_paper.pdf" "What is this about?"
+python src/rag_visualizer.py "papers/easy/cybersecurity_easy.pdf" "What is this about?"
 
 # Step 6: Check output
-# (Open rag_report.docx in project root)
+# (Open reports/<paper-name>__<question>/rag_report.docx)
 ```
 
 ---

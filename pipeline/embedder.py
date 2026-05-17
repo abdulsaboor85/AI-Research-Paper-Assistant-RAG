@@ -22,11 +22,13 @@ def embed_and_store(chunks, collection_name="research_papers_v2"):
 
     embeddings = model.encode(chunks).tolist()
     ids = [f"chunk_{i}" for i in range(len(chunks))]
+    metadatas = [{"chunk_index": i} for i in range(len(chunks))]
 
     collection.add(
         documents=chunks,
         embeddings=embeddings,
-        ids=ids
+        ids=ids,
+        metadatas=metadatas
     )
 
     print(f"✅ Stored {len(chunks)} chunks in ChromaDB")

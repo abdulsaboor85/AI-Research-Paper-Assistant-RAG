@@ -1,19 +1,19 @@
 """
 ====================================================
- PATH  →  rag_visualizer.py   (project root)
+ PATH  ->  src/rag_visualizer.py
 ====================================================
 
 Runs the full RAG pipeline visually and exports
 a Word document showing every step.
 
 Run:
-    python rag_visualizer.py "path/to/paper.pdf" "your question"
+    python src/rag_visualizer.py "path/to/paper.pdf" "your question"
 
 Example:
-    python rag_visualizer.py "papers/attention.pdf" "How does self-attention work?"
+    python src/rag_visualizer.py "papers/attention.pdf" "How does self-attention work?"
 
 Output:
-    rag_report.docx  (created in project root)
+    reports/<paper-name>__<question>/rag_report.docx
 """
 
 import os
@@ -26,8 +26,11 @@ import numpy as np
 import pdfplumber
 from dotenv import load_dotenv
 
-load_dotenv()
-sys.path.append(os.path.join(os.path.dirname(__file__), "pipeline"))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPORTS_DIR = os.path.join(PROJECT_ROOT, "reports")
+
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+sys.path.append(os.path.join(PROJECT_ROOT, "pipeline"))
 
 from sentence_transformers import SentenceTransformer
 import google.genai as genai
@@ -38,6 +41,24 @@ client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 TOP_K            = 3
 VECTOR_PREVIEW   = 8
+
+
+def safe_folder_name(value: str, max_length: int = 80) -> str:
+    value = re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_").lower()
+    return (value[:max_length].strip("_") or "untitled")
+
+
+def build_report_dir(pdf_path: str, question: str) -> str:
+    paper_name = safe_folder_name(os.path.splitext(os.path.basename(pdf_path))[0])
+    question_name = safe_folder_name(question, max_length=120)
+    folder_name = f"{paper_name}__{question_name}"
+    report_dir = os.path.join(REPORTS_DIR, folder_name)
+
+    if os.path.exists(report_dir):
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        report_dir = os.path.join(REPORTS_DIR, f"{folder_name}__{timestamp}")
+
+    return report_dir
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -345,15 +366,18 @@ def run(pdf_path: str, question: str):
     }
 
     # ── Save JSON for Node.js ─────────────────────────────────────
-    json_path = os.path.join(os.path.dirname(__file__), "rag_data.json")
+    report_dir = build_report_dir(pdf_path, question)
+    os.makedirs(report_dir, exist_ok=True)
+    json_path = os.path.join(report_dir, "rag_data.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-    print(f"  Pipeline data saved to rag_data.json")
+    rel_json_path = os.path.relpath(json_path, PROJECT_ROOT)
+    print(f"  Pipeline data saved to {rel_json_path}")
 
     # ── Call Node.js to generate Word doc ─────────────────────────
-    js_path   = os.path.join(os.path.dirname(__file__), "rag_report_gen.js")
-    docx_path = os.path.join(os.path.dirname(__file__), "rag_report.docx")
+    js_path   = os.path.join(PROJECT_ROOT, "scripts", "rag_report_gen.js")
+    docx_path = os.path.join(report_dir, "rag_report.docx")
 
     print(f"  Generating Word document...")
     result = subprocess.run(
@@ -362,8 +386,9 @@ def run(pdf_path: str, question: str):
     )
 
     if result.returncode == 0:
+        rel_docx_path = os.path.relpath(docx_path, PROJECT_ROOT)
         print(f"\n{'='*60}")
-        print(f"  ✓  Word document created:  rag_report.docx")
+        print(f"  ✓  Word document created:  {rel_docx_path}")
         print(f"{'='*60}\n")
     else:
         print(f"\n  [ERROR] Word generation failed:")
@@ -378,8 +403,8 @@ def run(pdf_path: str, question: str):
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("\n  Usage   :  python rag_visualizer.py \"path/to/paper.pdf\" \"your question\"")
-        print("  Example :  python rag_visualizer.py \"papers/attention.pdf\" \"How does attention work?\"\n")
+        print("\n  Usage   :  python src/rag_visualizer.py \"path/to/paper.pdf\" \"your question\"")
+        print("  Example :  python src/rag_visualizer.py \"papers/attention.pdf\" \"How does attention work?\"\n")
         sys.exit(1)
 
     pdf_path = sys.argv[1]
