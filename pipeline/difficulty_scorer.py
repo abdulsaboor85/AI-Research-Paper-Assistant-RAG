@@ -143,7 +143,8 @@ def compute_readability_score(text: str) -> tuple:
 
     # Flesch-Kincaid Grade Level (normalized to 0-10)
     fk_grade = 0.39 * asl + 11.8 * asw - 15.59
-    fk_score = min(10.0, max(0.0, (fk_grade / 16.0) * 10.0))
+    
+    fk_score = min(10.0, max(0.0, (fk_grade / 22.0) * 10.0))
 
     # Flesch Reading Ease (0-100 scale)
     fre_score = max(0.0, min(100.0, 206.835 - 1.015 * asl - 84.6 * asw))
