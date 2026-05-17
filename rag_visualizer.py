@@ -3,16 +3,25 @@
  PATH  →  rag_visualizer.py   (project root)
 ====================================================
 
+Runs the full RAG pipeline visually and exports
+a Word document showing every step.
+
 Run:
-    python rag_visualizer.py "path/to/paper.pdf" "your question here"
+    python rag_visualizer.py "path/to/paper.pdf" "your question"
 
 Example:
     python rag_visualizer.py "papers/attention.pdf" "How does self-attention work?"
+
+Output:
+    rag_report.docx  (created in project root)
 """
 
 import os
 import sys
+import re
+import json
 import time
+import subprocess
 import numpy as np
 import pdfplumber
 from dotenv import load_dotenv
@@ -25,69 +34,53 @@ from model_config import GEMINI_MODEL_POOL, MAX_RETRIES_PER_MODEL, RETRY_DELAY_S
 from google import genai
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
 EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
 TOP_K            = 3
-VECTOR_PREVIEW   = 8   # number of vector dimensions to show
+VECTOR_PREVIEW   = 8
 
 
-# ── Display Helpers ───────────────────────────────────────────────────────────
-
-def divider(char="─", width=68):
-    print(char * width)
-
-def header(title):
-    print()
-    divider("═")
-    print(f"  {title}")
-    divider("═")
-
-def sub(title):
-    print()
-    divider()
-    print(f"  {title}")
-    divider()
-
-def fmt_vector(vec):
-    preview = "  [ " + ",   ".join(f"{v:+.4f}" for v in vec[:VECTOR_PREVIEW]) + ",  ... ]"
-    norm    = f"  norm={np.linalg.norm(vec):.4f}   total dims={len(vec)}"
-    return preview, norm
-
-def cosine_similarity(a, b):
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
-
-def similarity_bar(score, width=28):
-    filled = int(max(score, 0) * width)
-    bar    = "█" * filled + "░" * (width - filled)
-    return f"[{bar}]  {score:.4f}"
-
-def wrap_print(text, indent="  ", width=65):
-    words = text.split()
-    line  = indent
-    for word in words:
-        if len(line) + len(word) + 1 > width:
-            print(line)
-            line = indent
-        line += word + " "
-    if line.strip():
-        print(line)
-
-
-# ── PDF Extraction ────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+#  PDF Text Extraction  (fix for joined words like "hellomynameis")
+# ─────────────────────────────────────────────────────────────────────────────
 
 def extract_text(pdf_path: str) -> str:
-    text = ""
+    """
+    Extracts text from PDF using pdfplumber with word-level spacing fix.
+    Uses extract_words() instead of extract_text() to correctly reconstruct
+    words with proper spaces — fixes the "hellomynameis" problem.
+    """
+    all_lines = []
+
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
-    return text.strip()
+            words = page.extract_words(
+                x_tolerance     = 3,
+                y_tolerance     = 3,
+                keep_blank_chars = False,
+            )
+            if not words:
+                continue
+
+            # Group words into lines by their top-y position
+            lines     = {}
+            for word in words:
+                y_key = round(word["top"], 1)
+                lines.setdefault(y_key, []).append(word)
+
+            # Sort lines top to bottom, words left to right within each line
+            for y in sorted(lines.keys()):
+                line_words = sorted(lines[y], key=lambda w: w["x0"])
+                line_text  = " ".join(w["text"] for w in line_words)
+                all_lines.append(line_text)
+
+    return "\n".join(all_lines).strip()
 
 
-# ── Chunker ───────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+#  Chunker
+# ─────────────────────────────────────────────────────────────────────────────
 
-def chunk_text(text: str, chunk_size=100, overlap=20):
+def chunk_text(text: str, chunk_size: int = 100, overlap: int = 20) -> list:
     words  = text.split()
     chunks = []
     start  = 0
@@ -101,7 +94,17 @@ def chunk_text(text: str, chunk_size=100, overlap=20):
     return chunks
 
 
-# ── LLM Call ─────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+#  Cosine Similarity
+# ─────────────────────────────────────────────────────────────────────────────
+
+def cosine_similarity(a, b) -> float:
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  LLM Call  (shared model pool from model_config.py)
+# ─────────────────────────────────────────────────────────────────────────────
 
 def call_llm(question: str, top_chunks: list) -> tuple:
     client  = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -129,223 +132,191 @@ Answer:"""
                     contents = prompt,
                     config   = {"max_output_tokens": 1024}
                 )
+                print(f"  ✓  [{model_name}] answered successfully")
                 return response.text.strip(), model_name
+
             except Exception as e:
                 last_error = e
                 error_str  = str(e)
                 if "429" in error_str or "quota" in error_str.lower() or \
                    "503" in error_str or "UNAVAILABLE" in error_str:
-                    print(f"    ⚠  [{model_name}] quota/unavailable "
+                    print(f"  ⚠  [{model_name}] quota/unavailable "
                           f"(attempt {attempt}/{MAX_RETRIES_PER_MODEL}) "
                           f"— retrying in {RETRY_DELAY_SECONDS}s...")
                     time.sleep(RETRY_DELAY_SECONDS)
                     continue
                 elif "404" in error_str or "NOT_FOUND" in error_str or \
                      "invalid" in error_str.lower():
-                    print(f"    ✗  [{model_name}] not available — skipping...")
+                    print(f"  ✗  [{model_name}] not available — skipping...")
                     break
                 else:
-                    print(f"    ✗  [{model_name}] unexpected error: {e}")
+                    print(f"  ✗  [{model_name}] error: {e}")
                     break
-        print(f"    →  Moving to next model in pool...")
+        print(f"  →  Moving to next model...")
+
     raise Exception(f"All models failed. Last error: {last_error}")
 
 
-# ── Main Pipeline Visualizer ──────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+#  Main Pipeline  — collects all data into a dict, then generates Word doc
+# ─────────────────────────────────────────────────────────────────────────────
 
-def run_visualizer(pdf_path: str, question: str):
+def run(pdf_path: str, question: str):
 
-    filename = os.path.basename(pdf_path)
+    print(f"\n{'='*60}")
+    print(f"  RAG PIPELINE VISUALIZER")
+    print(f"{'='*60}")
+    print(f"  PDF      : {os.path.basename(pdf_path)}")
+    print(f"  Question : {question}")
+    print(f"{'='*60}\n")
 
-    # ── Load embedding model ──────────────────────────────────────────────────
-    print(f"\n  Loading embedding model  :  {EMBED_MODEL_NAME}")
-    model = SentenceTransformer(EMBED_MODEL_NAME)
-    print(f"  Vector dimensions        :  384")
-    print(f"  PDF                      :  {filename}")
-    print(f"  Question                 :  {question}")
+    # ── Load embedding model ──────────────────────────────────────
+    print("  [1/7]  Loading embedding model...")
+    embed_model = SentenceTransformer(EMBED_MODEL_NAME)
+    print(f"         Model: {EMBED_MODEL_NAME}  |  Dims: 384\n")
 
-
-    # ════════════════════════════════════════════════════════════════
-    #  STEP 1 — Extract text from PDF
-    # ════════════════════════════════════════════════════════════════
-    header("STEP 1 — EXTRACTING TEXT FROM PDF")
-
+    # ── STEP 1: Extract text ──────────────────────────────────────
+    print("  [2/7]  Extracting text from PDF...")
     raw_text = extract_text(pdf_path)
-    words    = raw_text.split()
-    print(f"\n  File         :  {filename}")
-    print(f"  Total words  :  {len(words)}")
-    print(f"  Total chars  :  {len(raw_text)}")
-    print(f"\n  First 300 characters extracted:\n")
-    print(f"  \"{raw_text[:300]}...\"")
+    print(f"         Extracted {len(raw_text.split())} words\n")
 
-
-    # ════════════════════════════════════════════════════════════════
-    #  STEP 2 — Chunk the text
-    # ════════════════════════════════════════════════════════════════
-    header("STEP 2 — CHUNKING THE TEXT")
-
+    # ── STEP 2: Chunk ─────────────────────────────────────────────
+    print("  [3/7]  Chunking text...")
     chunks = chunk_text(raw_text, chunk_size=100, overlap=20)
+    print(f"         Produced {len(chunks)} chunks\n")
 
-    print(f"\n  Chunk size   :  100 words")
-    print(f"  Overlap      :  20 words  (shared between consecutive chunks)")
-    print(f"  Total chunks :  {len(chunks)}\n")
+    # ── STEP 3: Embed chunks ──────────────────────────────────────
+    print("  [4/7]  Embedding chunks...")
+    chunk_vectors = [embed_model.encode(c) for c in chunks]
+    print(f"         Each chunk → 384-dim vector\n")
 
-    # Show first 4 chunks only to keep output readable
-    display_limit = min(4, len(chunks))
-    for i in range(display_limit):
-        chunk = chunks[i]
-        print(f"  ── Chunk {i+1}  ({len(chunk.split())} words) " + "─" * 35)
-        wrap_print(f'"{chunk[:180]}{"..." if len(chunk) > 180 else ""}"')
-        print()
+    # ── STEP 4: Embed question ────────────────────────────────────
+    print("  [5/7]  Embedding question...")
+    q_vec = embed_model.encode(question)
+    print(f"         Question → 384-dim vector\n")
 
-    if len(chunks) > display_limit:
-        print(f"  ... ({len(chunks) - display_limit} more chunks not shown)\n")
-
-
-    # ════════════════════════════════════════════════════════════════
-    #  STEP 3 — Embed each chunk
-    # ════════════════════════════════════════════════════════════════
-    header("STEP 3 — EMBEDDING CHUNKS INTO VECTORS")
-
-    print(f"\n  Model   :  {EMBED_MODEL_NAME}")
-    print(f"  Each chunk of text → a 384-dim float vector")
-    print(f"  Showing first {VECTOR_PREVIEW} dimensions of each vector\n")
-
-    chunk_vectors = []
-    for i, chunk in enumerate(chunks):
-        vec = model.encode(chunk)
-        chunk_vectors.append(vec)
-
-    # Display vectors for first 4 chunks only
-    for i in range(display_limit):
-        preview, norm = fmt_vector(chunk_vectors[i])
-        print(f"  Chunk {i+1}:")
-        print(f"    Text   : \"{chunks[i][:70]}{'...' if len(chunks[i]) > 70 else ''}\"")
-        print(f"    Vector :")
-        print(f"    {preview}")
-        print(f"    {norm}")
-        print()
-
-    if len(chunks) > display_limit:
-        print(f"  ... ({len(chunks) - display_limit} more chunk vectors computed but not shown)\n")
-
-
-    # ════════════════════════════════════════════════════════════════
-    #  STEP 4 — Embed the question
-    # ════════════════════════════════════════════════════════════════
-    header("STEP 4 — EMBEDDING THE QUESTION INTO A VECTOR")
-
-    print(f"\n  Question : \"{question}\"\n")
-
-    q_vec         = model.encode(question)
-    preview, norm = fmt_vector(q_vec)
-
-    print(f"  Question Vector:")
-    print(f"    {preview}")
-    print(f"    {norm}")
-    print(f"\n  This vector captures the semantic meaning of the question.")
-    print(f"  It will be compared against every chunk vector.")
-
-
-    # ════════════════════════════════════════════════════════════════
-    #  STEP 5 — Cosine Similarity
-    # ════════════════════════════════════════════════════════════════
-    header("STEP 5 — COSINE SIMILARITY: QUESTION vs EVERY CHUNK")
-
-    print(f"""
-  Cosine similarity = angle between two vectors in 384D space.
-
-    score = 1.00  →  vectors point in same direction (same meaning)
-    score = 0.50  →  somewhat related
-    score = 0.00  →  completely unrelated
-    score < 0.00  →  opposite meaning
-""")
-
+    # ── STEP 5: Cosine similarity ─────────────────────────────────
+    print("  [6/7]  Computing cosine similarities...")
     similarities = []
     for i, (chunk, c_vec) in enumerate(zip(chunks, chunk_vectors)):
         sim = cosine_similarity(q_vec, c_vec)
-        similarities.append((sim, i, chunk))
+        similarities.append((sim, i, chunk, c_vec.tolist()))
 
-    # Show all similarities sorted
     ranked = sorted(similarities, key=lambda x: x[0], reverse=True)
+    top_k  = ranked[:TOP_K]
+    print(f"         Top {TOP_K} chunks selected\n")
 
-    print(f"  All {len(chunks)} chunks ranked by similarity:\n")
-    for rank, (sim, orig_idx, chunk) in enumerate(ranked):
-        marker = "  ✓ SELECTED" if rank < TOP_K else "    skipped "
-        print(f"  Rank {rank+1:>2}  |  Chunk {orig_idx+1:>2}  |  "
-              f"{similarity_bar(sim)}  |{marker}")
-        print(f"          \"{chunk[:60]}{'...' if len(chunk) > 60 else ''}\"")
-        print()
-
-
-    # ════════════════════════════════════════════════════════════════
-    #  STEP 6 — Show Top-K
-    # ════════════════════════════════════════════════════════════════
-    header(f"STEP 6 — TOP {TOP_K} CHUNKS SELECTED FOR LLM")
-
-    top_k      = ranked[:TOP_K]
-    top_chunks = []
-
-    print(f"\n  These {TOP_K} chunks scored highest against the question vector.\n")
-    for rank, (sim, orig_idx, chunk) in enumerate(top_k):
-        print(f"  ── Selected Chunk {rank+1}  "
-              f"(original Chunk {orig_idx+1}, similarity: {sim:.4f}) " + "─"*10)
-        wrap_print(f'"{chunk}"')
-        print()
-        top_chunks.append(chunk)
-
-    total_words = sum(len(c.split()) for c in top_chunks)
-    print(f"  Total context sent to LLM  :  {total_words} words")
-    print(f"  Question sent to LLM       :  \"{question}\"")
-
-
-    # ════════════════════════════════════════════════════════════════
-    #  STEP 7 — LLM call
-    # ════════════════════════════════════════════════════════════════
-    header("STEP 7 — CALLING LLM WITH TOP-K CHUNKS + QUESTION")
-
-    print(f"\n  Model pool tried in order:")
-    for i, m in enumerate(GEMINI_MODEL_POOL):
-        print(f"    {i+1}. {m}")
-
-    print(f"\n  Prompt structure:\n")
-    print(f"  ┌{'─'*62}┐")
-    print(f"  │  ROLE    : Research paper assistant                       │")
-    print(f"  │  CONTEXT : Top {TOP_K} chunks ({total_words} words)                          │")
-    print(f"  │  QUESTION: {question[:50]:<50}  │")
-    print(f"  │  OUTPUT  : Answer using ONLY the provided context         │")
-    print(f"  └{'─'*62}┘")
-
-    print(f"\n  Calling LLM...\n")
-
+    # ── STEP 6: Call LLM ──────────────────────────────────────────
+    print("  [7/7]  Calling LLM...")
+    top_chunks = [r[2] for r in top_k]
     answer, used_model = call_llm(question, top_chunks)
+    print()
 
+    # ── Build data payload for Word doc generator ─────────────────
+    data = {
+        "pdf_name":      os.path.basename(pdf_path),
+        "question":      question,
+        "embed_model":   EMBED_MODEL_NAME,
+        "llm_model":     used_model,
+        "model_pool":    GEMINI_MODEL_POOL,
+        "top_k":         TOP_K,
+        "vector_dims":   384,
+        "vector_preview": VECTOR_PREVIEW,
 
-    # ════════════════════════════════════════════════════════════════
-    #  STEP 8 — Final Answer
-    # ════════════════════════════════════════════════════════════════
-    header("STEP 8 — FINAL ANSWER")
+        # Step 1 — raw text sample
+        "raw_text_words": len(raw_text.split()),
+        "raw_text_sample": raw_text[:600],
 
-    print(f"\n  Model used  :  {used_model}")
-    print(f"  Question    :  {question}")
-    print()
-    divider()
-    print()
-    wrap_print(answer, indent="  ", width=68)
-    print()
-    divider("═")
-    print(f"  Done. Full RAG pipeline visualized.")
-    divider("═")
-    print()
+        # Step 2 — all chunks
+        "chunks": [
+            {
+                "index":      i + 1,
+                "text":       chunk,
+                "word_count": len(chunk.split()),
+            }
+            for i, chunk in enumerate(chunks)
+        ],
+
+        # Step 3 — chunk vectors
+        "chunk_vectors": [
+            {
+                "chunk_index": i + 1,
+                "preview":     cv[:VECTOR_PREVIEW],
+                "norm":        float(np.linalg.norm(np.array(cv))),
+            }
+            for i, cv in enumerate([v.tolist() for v in chunk_vectors])
+        ],
+
+        # Step 4 — question vector
+        "question_vector": {
+            "preview": q_vec[:VECTOR_PREVIEW].tolist(),
+            "norm":    float(np.linalg.norm(q_vec)),
+        },
+
+        # Step 5 — all similarities ranked
+        "similarities_ranked": [
+            {
+                "rank":        rank + 1,
+                "chunk_index": orig_idx + 1,
+                "score":       round(sim, 4),
+                "selected":    rank < TOP_K,
+                "text":        chunk[:120],
+            }
+            for rank, (sim, orig_idx, chunk, _) in enumerate(ranked)
+        ],
+
+        # Step 6 — top-k chunks sent to LLM
+        "top_k_chunks": [
+            {
+                "rank":        rank + 1,
+                "chunk_index": orig_idx + 1,
+                "score":       round(sim, 4),
+                "text":        chunk,
+                "vector_preview": c_vec[:VECTOR_PREVIEW],
+                "norm":        float(np.linalg.norm(np.array(c_vec))),
+            }
+            for rank, (sim, orig_idx, chunk, c_vec) in enumerate(top_k)
+        ],
+
+        # Step 7 — answer
+        "answer": answer,
+    }
+
+    # ── Save JSON for Node.js ─────────────────────────────────────
+    json_path = os.path.join(os.path.dirname(__file__), "rag_data.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    print(f"  Pipeline data saved to rag_data.json")
+
+    # ── Call Node.js to generate Word doc ─────────────────────────
+    js_path   = os.path.join(os.path.dirname(__file__), "rag_report_gen.js")
+    docx_path = os.path.join(os.path.dirname(__file__), "rag_report.docx")
+
+    print(f"  Generating Word document...")
+    result = subprocess.run(
+        ["node", js_path, json_path, docx_path],
+        capture_output=True, text=True
+    )
+
+    if result.returncode == 0:
+        print(f"\n{'='*60}")
+        print(f"  ✓  Word document created:  rag_report.docx")
+        print(f"{'='*60}\n")
+    else:
+        print(f"\n  [ERROR] Word generation failed:")
+        print(result.stderr)
+
+    # ── Cleanup JSON ──────────────────────────────────────────────
+    if os.path.exists(json_path):
+        os.remove(json_path)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-
     if len(sys.argv) < 3:
-        print("\n  [ERROR] Missing arguments.")
-        print("  Usage   :  python rag_visualizer.py \"path/to/paper.pdf\" \"your question\"")
+        print("\n  Usage   :  python rag_visualizer.py \"path/to/paper.pdf\" \"your question\"")
         print("  Example :  python rag_visualizer.py \"papers/attention.pdf\" \"How does attention work?\"\n")
         sys.exit(1)
 
@@ -355,13 +326,11 @@ if __name__ == "__main__":
     if not os.path.exists(pdf_path):
         print(f"\n  [ERROR] File not found: {pdf_path}\n")
         sys.exit(1)
-
     if not pdf_path.lower().endswith(".pdf"):
         print(f"\n  [ERROR] Must be a PDF file.\n")
         sys.exit(1)
-
     if not os.getenv("GEMINI_API_KEY"):
         print(f"\n  [ERROR] GEMINI_API_KEY not found in .env\n")
         sys.exit(1)
 
-    run_visualizer(pdf_path, question)
+    run(pdf_path, question)
