@@ -19,18 +19,11 @@ __pycache__/
 dist/
 build/
 
-# Node Modules (can be reinstalled with npm install)
-node_modules/
-npm-debug.log
-package-lock.json
-
 # Vector Database (large, auto-generated)
 chroma_db/
 
 # Generated Files
 rag_data.json
-rag_report.docx
-*.docx
 
 # IDE and Editor Files
 .vscode/

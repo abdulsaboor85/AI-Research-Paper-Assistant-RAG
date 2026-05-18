@@ -23,13 +23,7 @@ source venv/bin/activate
 python -m pip install -r requirements.txt
 
 
-
-4. Install Node.js dependencies
-
-npm install
-
-
-5. Create environment file
+4. Create environment file
 
 Create a file named .env in the project root.
 Add your Gemini API key:
@@ -37,16 +31,17 @@ Add your Gemini API key:
 GEMINI_API_KEY=your_api_key_here
 
 
-6. Run full RAG visualization report
+5. Run RAG answer debug
 
-python src/rag_visualizer.py "papers/your_paper.pdf" "your question"
+python src/rag_answer_debug.py "papers/your_paper.pdf" "your question"
 
 Example:
-python src/rag_visualizer.py "papers/easy/cybersecurity_easy.pdf" "what should employees do"
+python src/rag_answer_debug.py "papers/easy/cybersecurity_easy.pdf" "what should employees do"
+
+Use --full-vectors if you want complete vectors instead of vector previews.
 
 
-
-7. Run paper difficulty analysis
+6. Run paper difficulty analysis
 
 python src/analyze_pdf.py "papers/your_paper.pdf"
 
@@ -54,7 +49,7 @@ Example:
 python src/analyze_pdf.py "papers/easy/cybersecurity_easy.pdf"
 
 
-8. Run interactive Q&A pipeline
+7. Run interactive Q&A pipeline
 
 python pipeline/pipeline.py "papers/your_paper.pdf"
 
@@ -63,5 +58,3 @@ python pipeline/pipeline.py "papers/easy/cybersecurity_easy.pdf"
 
 Then type questions in the terminal.
 Type exit to stop.
-
-
