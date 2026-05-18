@@ -55,7 +55,7 @@ except OSError:
 #   LLM 8 (hard) + high metrics → final ~8.5 → should be "Very Hard"
 DIFFICULTY_LABELS = [
     (3.5,  "Easy"),
-    (7.0,  "Medium"),
+    (6.5,  "Medium"),
     (10.0, "Hard"),
 ]
 # ── Score weights (must sum to 1.0) ─────────────────────────────────────────
@@ -116,7 +116,8 @@ def _count_syllables(word: str) -> int:
 
 def compute_readability_score(text: str) -> tuple:
     """
-    Computes both Flesch-Kincaid Grade Level and Flesch Reading Ease.
+    Computes a readability difficulty score using both Flesch-Kincaid Grade
+    Level and Flesch Reading Ease.
 
     Flesch-Kincaid Grade Level formula:
         FK = 0.39 * ASL + 11.8 * ASW - 15.59
@@ -128,28 +129,30 @@ def compute_readability_score(text: str) -> tuple:
     ASW = average syllables per word
 
     Returns:
-        tuple: (fk_score, fre_score)
-        - fk_score: 0-10 normalized Flesch-Kincaid Grade Level
+        tuple: (readability_score, fk_grade, fre_score)
+        - readability_score: 0-10 blended difficulty score
+        - fk_grade: raw Flesch-Kincaid grade level
         - fre_score: 0-100 Flesch Reading Ease
     """
     sentences = sent_tokenize(text)
     words = [w for w in word_tokenize(text) if w.isalpha()]
 
     if not sentences or not words:
-        return 5.0, 50.0
+        return 5.0, 5.0, 50.0
 
     asl = len(words) / len(sentences)
     asw = sum(_count_syllables(w) for w in words) / len(words)
 
-    # Flesch-Kincaid Grade Level (normalized to 0-10)
     fk_grade = 0.39 * asl + 11.8 * asw - 15.59
-    
-    fk_score = min(10.0, max(0.0, (fk_grade / 22.0) * 10.0))
-
-    # Flesch Reading Ease (0-100 scale)
     fre_score = max(0.0, min(100.0, 206.835 - 1.015 * asl - 84.6 * asw))
 
-    return round(fk_score, 2), round(fre_score, 1)
+    # Easier calibration for short, plain-English papers
+    fk_difficulty = min(10.0, max(0.0, (fk_grade / 30.0) * 10.0))
+    fre_difficulty = min(10.0, max(0.0, (100.0 - fre_score) / 14.0))
+
+    readability_score = round((fk_difficulty * 0.20) + (fre_difficulty * 0.80), 2)
+
+    return readability_score, round(fk_grade, 2), round(fre_score, 1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -194,10 +197,28 @@ def compute_uncommon_word_score(text: str) -> float:
 #  COMPONENT 3: Technical Term Score (scispaCy + NLTK filter)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def extract_technical_terms(text: str) -> set[str]:
+    """
+    Extracts unique technical lemmas detected by scispaCy while filtering out
+    common English words and short generic terms.
+    """
+    doc = NLP_SCI(text[:50000])
+    technical_terms: set[str] = set()
+
+    for ent in doc.ents:
+        for token in ent:
+            if token.is_alpha:
+                lemma = LEMMATIZER.lemmatize(token.text.lower())
+                if len(lemma) > 4 and lemma not in COMMON_WORDS:
+                    technical_terms.add(lemma)
+
+    return technical_terms
+
+
 def compute_technical_term_score(text: str) -> float:
     """
-    Uses scispaCy (en_core_sci_sm) to detect scientific entities, then
-    filters out tokens already in NLTK common words corpus.
+    Uses scispaCy (en_core_sci_sm) to detect scientific entities, then filters
+    out tokens already in NLTK common words corpus.
 
     Why the filter?
     scispaCy over-detects on non-biomedical text — it flags "research papers",
@@ -207,7 +228,7 @@ def compute_technical_term_score(text: str) -> float:
 
     Calibration:
         0%  genuine technical density → score 0
-        15%+ genuine technical density → score 10
+        20%+ genuine technical density → score 10
     """
     doc = NLP_SCI(text[:50000])
 
@@ -216,17 +237,11 @@ def compute_technical_term_score(text: str) -> float:
     if not all_tokens:
         return 5.0
 
-    genuine_technical_count = 0
-    for ent in doc.ents:
-        for token in ent:
-            if token.is_alpha:
-                lemma = LEMMATIZER.lemmatize(token.text.lower())
-                if lemma not in COMMON_WORDS:
-                    genuine_technical_count += 1
+    technical_terms = extract_technical_terms(text)
+    density = len(technical_terms) / len(all_tokens)
 
-    density = genuine_technical_count / len(all_tokens)
-    # Lowered from 0.15 to 0.08 to reduce false positives on academic papers
-    score = min(10.0, (density / 0.08) * 10.0)
+    # More conservative calibration to avoid maxing out on short, easy papers.
+    score = min(10.0, (density / 0.20) * 10.0)
 
     return round(score, 2)
 
@@ -416,8 +431,8 @@ def analyze_difficulty(full_text: str, api_key: str) -> dict:
     # ── Extract opening text for LLM ─────────────────────────────────────────
     opening_text = extract_opening_text(full_text)
 
-    # ── Compute readability scores (both FK and FRE) ──────────────────────────
-    r_score, fre_score = compute_readability_score(full_text)
+    # ── Compute readability scores (blended difficulty + raw FK/FRE) ──────────
+    r_score, fk_grade, fre_score = compute_readability_score(full_text)
     
     # ── Compute remaining component scores ────────────────────────────────────
     u_score = compute_uncommon_word_score(full_text)
@@ -455,14 +470,8 @@ def analyze_difficulty(full_text: str, api_key: str) -> dict:
         1
     )
 
-    doc = NLP_SCI(full_text[:50000])
-    genuine_tech = sum(
-        1 for ent in doc.ents
-        for token in ent
-        if token.is_alpha
-        and LEMMATIZER.lemmatize(token.text.lower()) not in COMMON_WORDS
-    )
-    technical_pct = round(genuine_tech / max(len(all_words), 1) * 100, 1)
+    technical_terms = extract_technical_terms(full_text)
+    technical_pct = round(len(technical_terms) / max(len(all_words), 1) * 100, 1)
 
     return {
         "scores": {
@@ -479,7 +488,7 @@ def analyze_difficulty(full_text: str, api_key: str) -> dict:
             "total_words":          len(all_words),
             "uncommon_word_pct":    uncommon_pct,
             "technical_term_pct":   technical_pct,
-            "flesch_kincaid_grade": r_score,
+            "flesch_kincaid_grade": fk_grade,
             "flesch_reading_ease":  fre_score,
         },
     }
