@@ -22,13 +22,6 @@ source venv/bin/activate
 
 python -m pip install -r requirements.txt
 
-Important:
-Run this again whenever requirements.txt changes.
-The difficulty analyzer needs nltk, spacy, wordfreq, and the en_core_sci_sm model.
-
-If you only need to fix the difficulty analyzer missing package error, run:
-python -m pip install nltk spacy wordfreq
-python -m pip install https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_core_sci_sm-0.5.4.tar.gz
 
 
 4. Install Node.js dependencies
@@ -72,30 +65,3 @@ Then type questions in the terminal.
 Type exit to stop.
 
 
-9. Useful checks
-
-Check Python packages:
-pip list
-
-Check difficulty analyzer imports:
-python -c "import nltk, spacy, wordfreq; spacy.load('en_core_sci_sm'); print('Difficulty dependencies OK')"
-
-Check Node package:
-npm list docx
-
-Check Python syntax:
-python -c "import ast, pathlib; [ast.parse(pathlib.Path(f).read_text(encoding='utf-8')) for f in ['src/rag_visualizer.py','src/analyze_pdf.py','pipeline/pipeline.py']]; print('Python syntax OK')"
-
-Check Node script:
-node --check scripts/rag_report_gen.js
-
-
-10. Project folders
-
-src       - main runnable Python scripts
-pipeline  - RAG pipeline code
-scripts   - helper JavaScript scripts
-docs      - documentation
-papers    - put PDF files here
-reports   - generated Word reports
-assets    - images and visual assets
