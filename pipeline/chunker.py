@@ -1,15 +1,16 @@
+"""Split extracted paper text into overlapping chunks."""
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-def chunk_text(text):
+CHUNK_SIZE = 300
+CHUNK_OVERLAP = 50
+SEPARATORS = ["\n\n", "\n", " "]
+
+
+def chunk_text(text: str) -> list[str]:
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=150,
-        separators=[
-            "\n\n",
-            "\n",
-            " "
-        ]
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+        separators=SEPARATORS,
     )
-    
-    chunks = splitter.split_text(text)
-    return chunks
+    return splitter.split_text(text)

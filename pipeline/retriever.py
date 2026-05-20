@@ -1,12 +1,15 @@
-from sentence_transformers import SentenceTransformer
-import chromadb
-import os
+"""Retrieve relevant text chunks from ChromaDB."""
+
 import re
+from pathlib import Path
 
-model = SentenceTransformer("BAAI/bge-base-en-v1.5")
+import chromadb
+from sentence_transformers import SentenceTransformer
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-client = chromadb.PersistentClient(path=os.path.join(BASE_DIR, "chroma_db"))
+EMBEDDING_MODEL_NAME = "BAAI/bge-base-en-v1.5"
+DEFAULT_COLLECTION_NAME = "research_papers_v2"
+BASE_DIR = Path(__file__).resolve().parent.parent
+CHROMA_PATH = BASE_DIR / "chroma_db"
 
 SUMMARY_QUESTION_PATTERNS = (
     "what is this paper about",
@@ -45,13 +48,16 @@ HIGH_SIGNAL_PATTERNS = (
     r"\bresults\b",
 )
 
-
-def _is_summary_question(query):
-    normalized = query.lower().strip()
-    return any(pattern in normalized for pattern in SUMMARY_QUESTION_PATTERNS)
+model = SentenceTransformer(EMBEDDING_MODEL_NAME)
+client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 
 
-def _low_signal_score(chunk):
+def is_summary_question(query: str) -> bool:
+    normalized_query = query.lower().strip()
+    return any(pattern in normalized_query for pattern in SUMMARY_QUESTION_PATTERNS)
+
+
+def score_low_signal(chunk: str) -> int:
     text = chunk.lower()
     score = sum(1 for pattern in LOW_SIGNAL_PATTERNS if re.search(pattern, text))
 
@@ -70,15 +76,16 @@ def _low_signal_score(chunk):
     return score
 
 
-def _high_signal_score(chunk):
+def score_high_signal(chunk: str) -> int:
     text = chunk.lower()
     return sum(1 for pattern in HIGH_SIGNAL_PATTERNS if re.search(pattern, text))
 
 
-def _get_opening_chunks(collection, count=3):
-    ids = [f"chunk_{i}" for i in range(count)]
+def get_opening_chunks(collection, count: int = 3) -> list[str]:
+    chunk_ids = [f"chunk_{index}" for index in range(count)]
+
     try:
-        result = collection.get(ids=ids)
+        result = collection.get(ids=chunk_ids)
     except Exception:
         return []
 
@@ -90,23 +97,35 @@ def _get_opening_chunks(collection, count=3):
     return [document for _, document in ordered if document]
 
 
-def _dedupe(chunks):
+def dedupe_chunks(chunks: list[str]) -> list[str]:
     seen = set()
     unique_chunks = []
+
     for chunk in chunks:
         key = re.sub(r"\s+", " ", chunk).strip()[:500]
         if key and key not in seen:
             seen.add(key)
             unique_chunks.append(chunk)
+
     return unique_chunks
 
 
-def retrieve_relevant_chunks(query, collection_name="research_papers_v2", top_k=10):
-    collection = client.get_or_create_collection(collection_name)
+def lexical_overlap_score(query: str, chunk: str) -> int:
+    query_words = set(re.findall(r"[a-zA-Z]+", query.lower()))
+    chunk_words = set(re.findall(r"[a-zA-Z]+", chunk.lower()))
+    return len(query_words & chunk_words)
 
-    is_summary = _is_summary_question(query)
+
+def retrieve_relevant_chunks(
+    query: str,
+    collection_name: str = DEFAULT_COLLECTION_NAME,
+    top_k: int = 10,
+) -> list[str]:
+    collection = client.get_or_create_collection(collection_name)
+    summary_mode = is_summary_question(query)
+
     search_query = query
-    if is_summary:
+    if summary_mode:
         search_query = (
             f"{query}. abstract introduction objective methodology approach "
             "contributions experiments results conclusion paper summary"
@@ -116,31 +135,35 @@ def retrieve_relevant_chunks(query, collection_name="research_papers_v2", top_k=
         [f"Represent this sentence for searching relevant passages: {search_query}"]
     ).tolist()
 
+    candidate_limit = max(top_k * 5, 30 if summary_mode else 20)
     results = collection.query(
         query_embeddings=query_embedding,
-        n_results=max(top_k * 3, 20 if is_summary else top_k),
+        n_results=candidate_limit,
     )
 
     chunks = results["documents"][0]
-    scores = results["distances"][0]
+    distances = results["distances"][0]
 
-    candidates = []
-    for rank, (chunk, score) in enumerate(zip(chunks, scores)):
-        adjusted_score = score
-        if is_summary:
-            adjusted_score += _low_signal_score(chunk) * 0.35
-            adjusted_score -= _high_signal_score(chunk) * 0.2
-        candidates.append((adjusted_score, rank, chunk))
+    ranked_candidates = []
+    for rank, (chunk, distance) in enumerate(zip(chunks, distances)):
+        adjusted_distance = distance - (lexical_overlap_score(query, chunk) * 0.1)
 
-    candidates.sort(key=lambda item: (item[0], item[1]))
-    selected = [
+        if summary_mode:
+            adjusted_distance += score_low_signal(chunk) * 0.35
+            adjusted_distance -= score_high_signal(chunk) * 0.2
+
+        ranked_candidates.append((adjusted_distance, rank, chunk))
+
+    ranked_candidates.sort(key=lambda item: (item[0], item[1]))
+
+    selected_chunks = [
         chunk
-        for _, _, chunk in candidates
-        if not is_summary or _low_signal_score(chunk) < 2
+        for _, _, chunk in ranked_candidates
+        if not summary_mode or score_low_signal(chunk) < 2
     ]
 
-    if is_summary:
-        selected = _get_opening_chunks(collection) + selected
+    if summary_mode:
+        selected_chunks = get_opening_chunks(collection) + selected_chunks
 
-    selected = _dedupe(selected)
-    return selected[:max(top_k, 7)]
+    selected_chunks = dedupe_chunks(selected_chunks)
+    return selected_chunks[:max(top_k, 10)]
