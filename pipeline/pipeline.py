@@ -20,11 +20,60 @@ SUMMARY_TRIGGERS = {
     "what does this paper cover", "what does this document cover",
 }
 
+SECTION_SUMMARY_HINTS = {
+    "abstract",
+    "introduction",
+    "intro",
+    "conclusion",
+    "methodology",
+    "methods",
+    "results",
+    "discussion",
+    "related work",
+    "background",
+    "literature review",
+    "limitations",
+    "section",
+    "chapter",
+}
+
+FULL_PAPER_SUMMARY_HINTS = {
+    "full paper",
+    "entire paper",
+    "whole paper",
+    "overall paper",
+    "paper summary",
+    "document summary",
+    "give me a summary",
+    "give me the summary",
+}
+
 
 def is_summary_request(question: str) -> bool:
     """Return True if the question is asking for a summary."""
     normalized = question.lower().strip()
     return any(trigger in normalized for trigger in SUMMARY_TRIGGERS)
+
+
+def is_section_summary_request(question: str) -> bool:
+    """Return True if the user is asking for a specific section summary."""
+    normalized = question.lower().strip()
+    return is_summary_request(normalized) and any(
+        hint in normalized for hint in SECTION_SUMMARY_HINTS
+    )
+
+
+def is_full_paper_summary_request(question: str) -> bool:
+    """Return True if the user is asking for a whole-paper summary."""
+    normalized = question.lower().strip()
+
+    if not is_summary_request(normalized):
+        return False
+
+    if any(hint in normalized for hint in FULL_PAPER_SUMMARY_HINTS):
+        return True
+
+    return not any(hint in normalized for hint in SECTION_SUMMARY_HINTS)
 
 
 def process_pdf(pdf_path: str) -> None:
@@ -98,7 +147,7 @@ if __name__ == "__main__":
             print("Goodbye!")
             break
 
-        if is_summary_request(question):
+        if is_full_paper_summary_request(question):
             print("\nAnswer:\nSummarization is handled separately. Please use the summary feature for this request.\n")
             continue
 
