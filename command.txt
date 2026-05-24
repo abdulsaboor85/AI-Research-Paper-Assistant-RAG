@@ -58,3 +58,6 @@ python pipeline/pipeline.py "papers/easy/cybersecurity_easy.pdf"
 
 Then type questions in the terminal.
 Type exit to stop.
+
+8. Run prequistes
+python pipeline/prerequisite_extractor.py "papers/hard/Attention all you need.pdf"

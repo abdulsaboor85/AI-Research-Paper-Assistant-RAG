@@ -1,8 +1,0 @@
-Traceback (most recent call last):
-  File "D:\tmp\check_difficulty.py", line 8, in <module>
-    from src.analyze_pdf import extract_text_from_pdf
-  File "D:\project\fyp\fyp - project\AI-Research-Paper-Assistant-RAG\src\analyze_pdf.py", line 24, in <module>
-    from difficulty_scorer import analyze_difficulty
-  File "D:\project\fyp\fyp - project\AI-Research-Paper-Assistant-RAG\pipeline\difficulty_scorer.py", line 21, in <module>
-    import spacy
-ModuleNotFoundError: No module named 'spacy'
