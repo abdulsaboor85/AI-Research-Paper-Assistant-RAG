@@ -1,6 +1,9 @@
 import os
+import re
 import sys
 import time
+from collections import Counter
+
 import pdfplumber
 from dotenv import load_dotenv
 from google import genai
@@ -14,219 +17,354 @@ from model_config import (
 load_dotenv()
 
 
-# -----------------------------
+# =========================================================
 # PDF TEXT EXTRACTION
-# -----------------------------
-def extract_pdf_text(pdf_path):
-    text = ""
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text += page_text + "\n"
+# =========================================================
+
+def clean_text(text: str) -> str:
+    """
+    Clean broken PDF text.
+    """
+
+    # remove multiple spaces
+    text = re.sub(r"\s+", " ", text)
+
+    # fix weird line joins
+    text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+
+    # remove references like [12]
+    text = re.sub(r"\[\d+\]", "", text)
+
+    # remove URLs
+    text = re.sub(r"http\S+", "", text)
+
     return text.strip()
 
 
+def extract_pdf_text(pdf_path):
+    text = ""
+
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+            page_text = page.extract_text()
+
+            if page_text:
+                text += page_text + "\n"
+
+    text = clean_text(text)
+
+    return text
+
+
+# =========================================================
+# TITLE EXTRACTION
+# =========================================================
+
+def extract_title(text: str) -> str:
+    """
+    Try to extract paper title from first lines.
+    """
+
+    lines = text.split("\n")
+
+    cleaned = []
+
+    for line in lines[:20]:
+        line = line.strip()
+
+        if len(line) < 5:
+            continue
+
+        if len(line.split()) > 20:
+            continue
+
+        cleaned.append(line)
+
+    if cleaned:
+        return cleaned[0]
+
+    return "Research Paper"
+
+
+# =========================================================
+# ABSTRACT EXTRACTION
+# =========================================================
+
 def extract_abstract(text):
     """
-    Simple heuristic: extract first 1500-2500 chars as abstract proxy
-    (you can improve later with section detection)
+    Extract abstract section properly.
     """
-    return text[:2500]
+
+    lower = text.lower()
+
+    start = lower.find("abstract")
+
+    if start == -1:
+        return text[:3000]
+
+    abstract_text = text[start:start + 4000]
+
+    # stop at introduction
+    intro_idx = abstract_text.lower().find("introduction")
+
+    if intro_idx != -1:
+        abstract_text = abstract_text[:intro_idx]
+
+    return abstract_text.strip()
 
 
-def extract_keywords(text):
+# =========================================================
+# KEYWORD EXTRACTION
+# =========================================================
+
+STOPWORDS = {
+    "the", "is", "in", "and", "to", "of", "a", "for",
+    "on", "we", "this", "that", "with", "as", "by",
+    "an", "are", "be", "from", "or", "it", "our",
+    "their", "using", "used", "into", "these",
+    "can", "has", "have", "had", "was", "were",
+    "will", "which", "than", "also", "such"
+}
+
+
+def extract_keywords(text, top_n=20):
     """
-    Lightweight keyword extraction fallback (no ML dependency required here)
+    Better keyword extraction.
     """
-    words = text.lower().split()
-    freq = {}
 
-    stopwords = set([
-        "the", "is", "in", "and", "to", "of", "a", "for", "on",
-        "we", "this", "that", "with", "as", "by", "an", "are"
-    ])
+    words = re.findall(r"\b[a-zA-Z]{4,}\b", text.lower())
 
-    for w in words:
-        if w.isalpha() and w not in stopwords and len(w) > 3:
-            freq[w] = freq.get(w, 0) + 1
+    filtered = [
+        w for w in words
+        if w not in STOPWORDS
+    ]
 
-    sorted_words = sorted(freq.items(), key=lambda x: x[1], reverse=True)
-    return [w for w, _ in sorted_words[:10]]
+    freq = Counter(filtered)
+
+    keywords = [
+        word for word, _ in freq.most_common(top_n)
+    ]
+
+    return keywords
 
 
-# -----------------------------
+# =========================================================
 # GEMINI CLIENT
-# -----------------------------
+# =========================================================
+
 class PrerequisiteExtractor:
+
     def __init__(self):
+
         api_key = os.getenv("GEMINI_API_KEY")
 
         if not api_key:
-            raise ValueError("❌ GEMINI_API_KEY not set in .env")
+            raise ValueError("❌ GEMINI_API_KEY not found in .env")
 
         self.client = genai.Client(api_key=api_key)
 
-    def build_prompt(self, title, abstract, keywords, references=""):
+    # =====================================================
+    # PROMPT
+    # =====================================================
+
+    def build_prompt(self, title, abstract, keywords):
+
         return f"""
-You are a senior machine learning professor and curriculum designer.
+You are an expert AI professor and curriculum designer.
 
-Your task is to extract the MINIMUM COMPLETE SET of prerequisites required to understand this research paper.
+Your task is to create a HIGH-QUALITY prerequisite roadmap for understanding a research paper.
 
-This is NOT a summary.
-This is NOT a keyword extraction.
-This is a CURRICULUM DESIGN task.
+IMPORTANT:
+This is NOT summarization.
+This is NOT keyword extraction.
 
-================================================
-🎯 CORE OBJECTIVE
-================================================
-Produce a CLEAN, NON-REDUNDANT, HIGH-LEVEL learning roadmap of prerequisites required to fully understand the paper.
+You must identify the MINIMUM COMPLETE SET of topics a university student should learn BEFORE reading this paper.
 
-The output must represent a university-level study plan.
+==================================================
+RULES
+==================================================
 
-================================================
-🚨 CRITICAL RULES (MOST IMPORTANT PART)
-================================================
+1. OUTPUT ONLY 12-18 ITEMS
 
-1) STRICT CONCEPT COMPRESSION (VERY IMPORTANT):
-- ALWAYS merge related sub-concepts into ONE concept
+2. ORDER:
+Start from basic concepts → advanced concepts.
 
-MANDATORY MERGING RULES:
+3. EACH ITEM FORMAT:
+1. Topic Name: Short explanation
 
-❌ NEVER split these:
+4. KEEP TOPICS HIGH-LEVEL
+GOOD:
+- Linear Algebra
+- Probability
+- Neural Networks
+- Transformers
+- Sequence Modeling
 
-- RNN, LSTM, GRU → Recurrent Neural Networks
-- Attention, Self-Attention, Multi-Head Attention, QKV, Scaled Dot-Product → Transformer Attention System
-- Feedforward NN, MLP → Feedforward Neural Networks
-- Encoder + Decoder + Seq2Seq → Sequence-to-Sequence Modeling
-- Layer Norm + Residual Connections + FFN → Transformer Block Architecture
+BAD:
+- Softmax
+- Query vectors
+- Positional encoding equations
+- Attention weights
 
-2) NO MICRO-CONCEPTS:
-- Do NOT include internal components of architectures
-- Do NOT explain mechanisms separately
-- Keep only HIGH-LEVEL concepts
+5. MERGE RELATED TOPICS
 
-3) STRICT LIMIT:
-- Output MUST contain 12 to 18 items ONLY
-- If more appear, MERGE further
+MERGE THESE:
+- RNN + LSTM + GRU → Recurrent Neural Networks
+- Self Attention + Multi Head Attention + QKV → Transformer Attention Mechanisms
+- Encoder + Decoder + Seq2Seq → Sequence-to-Sequence Learning
+- Residual + LayerNorm + FFN → Transformer Architecture
 
-4) STRICT ORDERING:
-- Arrange from MOST FUNDAMENTAL → MOST ADVANCED
-- Each item must build logically on the previous one
+6. REMOVE REDUNDANCY
 
-5) NO REDUNDANCY:
-- No repeated ideas in different wording
-- No overlapping concepts
+7. NO HEADINGS
+NO JSON
+NO EXTRA TEXT
 
-6) NO LOW-LEVEL DETAILS:
-- Avoid things like:
-  softmax, activation functions, small formulas, sub-mechanisms
+==================================================
+PAPER TITLE
+==================================================
 
-================================================
-📤 OUTPUT FORMAT
-================================================
-
-Return ONLY a numbered list:
-
-1) Concept Name: 1-line explanation
-2) Concept Name: 1-line explanation
-3) Concept Name: 1-line explanation
-
-NO headings, NO JSON, NO extra text.
-
-================================================
-📚 COVERAGE CHECKLIST
-================================================
-
-Ensure coverage of:
-- Mathematics (Linear Algebra, Calculus, Probability if needed)
-- Machine Learning fundamentals
-- Neural Networks (high-level only)
-- Sequence modeling (if applicable)
-- Transformer architecture (if applicable)
-- Training + optimization concepts
-- Evaluation metrics (if applicable)
-- System concepts (GPU, distributed training if relevant)
-
-================================================
-🧠 QUALITY GOAL
-================================================
-
-Your output must be:
-- Minimal
-- Complete
-- Non-redundant
-- High-level
-- Easy to study from
-- Suitable as a prerequisite syllabus for a university student
-
-================================================
-📄 INPUT
-================================================
-
-TITLE:
 {title}
 
-ABSTRACT:
+==================================================
+ABSTRACT
+==================================================
+
 {abstract}
 
-KEYWORDS:
-{", ".join(keywords)}
+==================================================
+KEYWORDS
+==================================================
 
-REFERENCES:
-{references if references else "Not provided"}
+{", ".join(keywords)}
 """
 
+    # =====================================================
+    # GEMINI CALL
+    # =====================================================
+
     def call_model(self, prompt):
+
         last_error = None
 
         for model in GEMINI_MODEL_POOL:
+
             for attempt in range(MAX_RETRIES_PER_MODEL):
+
                 try:
+
                     response = self.client.models.generate_content(
                         model=model,
                         contents=prompt
                     )
 
                     if response and response.text:
-                        return response.text
+                        return response.text.strip()
 
                 except Exception as e:
                     last_error = e
                     time.sleep(RETRY_DELAY_SECONDS)
 
-        raise RuntimeError(f"All models failed. Last error: {last_error}")
+        raise RuntimeError(f"All Gemini models failed. Last error: {last_error}")
+
+    # =====================================================
+    # CLEAN OUTPUT
+    # =====================================================
+
+    def clean_output(self, text: str) -> str:
+        """
+        Final cleanup for Gemini response.
+        """
+
+        lines = text.split("\n")
+
+        cleaned = []
+
+        seen = set()
+
+        for line in lines:
+
+            line = line.strip()
+
+            if not line:
+                continue
+
+            # remove markdown bullets
+            line = re.sub(r"^[-*]\s*", "", line)
+
+            # normalize numbering
+            line = re.sub(r"^\d+\)", "", line).strip()
+
+            # ensure numbering exists
+            if not re.match(r"^\d+\.", line):
+                line = f"{len(cleaned)+1}. {line}"
+
+            # duplicate removal
+            lower = line.lower()
+
+            if lower in seen:
+                continue
+
+            seen.add(lower)
+
+            cleaned.append(line)
+
+        return "\n".join(cleaned)
+
+    # =====================================================
+    # MAIN EXTRACTION
+    # =====================================================
 
     def extract(self, text):
-        title = "Research Paper"
+
+        title = extract_title(text)
+
         abstract = extract_abstract(text)
+
         keywords = extract_keywords(text)
 
-        prompt = self.build_prompt(title, abstract, keywords)
+        prompt = self.build_prompt(
+            title=title,
+            abstract=abstract,
+            keywords=keywords
+        )
 
         result = self.call_model(prompt)
+
+        result = self.clean_output(result)
 
         return result
 
 
-# -----------------------------
+# =========================================================
 # MAIN
-# -----------------------------
+# =========================================================
+
 def main():
+
     if len(sys.argv) < 2:
-        print("Usage: python prerequisite_extractor.py <pdf_path>")
+        print("Usage:")
+        print("python prerequisite_extractor.py <pdf_path>")
         return
 
     pdf_path = sys.argv[1]
 
-    print(f"\n📄 Processing: {pdf_path}\n")
+    print("\n🚀 Starting Analysis...\n")
 
     text = extract_pdf_text(pdf_path)
 
+    if len(text.strip()) < 100:
+        print("❌ Failed to extract enough text.")
+        return
+
     extractor = PrerequisiteExtractor()
+
     result = extractor.extract(text)
 
-    print("\n================ PREREQUISITES ================\n")
+    print("\n" + "=" * 80)
+    print("🎓 WHAT YOU SHOULD LEARN BEFORE THIS PAPER")
+    print("=" * 80 + "\n")
+
     print(result)
 
 

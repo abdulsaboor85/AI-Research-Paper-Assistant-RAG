@@ -1,11 +1,4 @@
 /* ═══════════════════════════════════════════════════════════
-   CSS PATH CONFIGURATION
-   ═══════════════════════════════════════════════════════════
-   This CSS file should be placed at the path specified in index.html
-   Make sure the path in index.html matches this file's location
-   ═══════════════════════════════════════════════════════════ */
-
-/* ═══════════════════════════════════════════════════════════
    RESET & ROOT VARIABLES
    ═══════════════════════════════════════════════════════════ */
 *, *::before, *::after {
@@ -427,14 +420,8 @@ body {
 }
 
 @keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .msg.user {
@@ -528,17 +515,12 @@ body {
   animation: pulse 1.4s infinite;
 }
 
-.thinking-dot:nth-child(2) {
-  animation-delay: 0.2s;
-}
-
-.thinking-dot:nth-child(3) {
-  animation-delay: 0.4s;
-}
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes pulse {
   0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
+  50%       { opacity: 1; }
 }
 
 .chat-input-wrapper {
@@ -827,33 +809,62 @@ body {
 }
 
 @keyframes toastSlideIn {
-  from {
-    opacity: 0;
-    transform: translateX(100px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+  from { opacity: 0; transform: translateX(100px); }
+  to   { opacity: 1; transform: translateX(0); }
 }
 
 /* ═══════════════════════════════════════════════════════════
    SCROLLBAR STYLING
    ═══════════════════════════════════════════════════════════ */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text2); }
+
+/* ═══════════════════════════════════════════════════════════
+   COMING SOON BOX
+   ═══════════════════════════════════════════════════════════ */
+.coming-soon-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 48px 24px;
+  background: var(--surface);
+  border: 1.5px dashed var(--border2);
+  border-radius: var(--radius-xl);
+  margin: 8px 0;
 }
 
-::-webkit-scrollbar-track {
-  background: transparent;
+.coming-soon-icon {
+  font-size: 40px;
+  margin-bottom: 14px;
+  line-height: 1;
 }
 
-::-webkit-scrollbar-thumb {
-  background: var(--border2);
+.coming-soon-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.coming-soon-text {
+  font-size: 12.5px;
+  color: var(--text2);
+  line-height: 1.7;
+  max-width: 340px;
+  margin-bottom: 16px;
+}
+
+.coming-soon-badge {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+  padding: 4px 14px;
   border-radius: 99px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
 }
