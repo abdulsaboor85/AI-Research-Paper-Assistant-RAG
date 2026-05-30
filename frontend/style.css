@@ -868,3 +868,53 @@ body {
   font-weight: 600;
   letter-spacing: 0.3px;
 }
+
+
+/* ═══════════════════════════════════════════════════════════
+   EXPLAIN TAB
+   ═══════════════════════════════════════════════════════════ */
+.explain-search-wrapper {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.explain-input {
+  flex: 1;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  transition: border-color 0.15s;
+}
+
+.explain-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.explain-btn {
+  padding: 10px 20px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-family: var(--font);
+  font-weight: 500;
+  font-size: 13px;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.explain-btn:hover {
+  opacity: 0.88;
+  transform: translateY(-1px);
+}
+
+.explain-btn:active {
+  transform: scale(0.98);
+}

@@ -449,7 +449,8 @@ function renderComparisonComingSoon() {
 /* ── Tab switching ────────────────────────────────────────────────────────── */
 
 function switchTab(name) {
-  const validTabs = ["chat", "summary", "insights", "prerequisites", "comparison"];
+  const validTabs = ["chat", "summary", "insights", "prerequisites", "comparison", "explain"];
+
 
   validTabs.forEach(tabName => {
     const tabEl   = document.getElementById(`tab-${tabName}`);
@@ -813,8 +814,153 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
+/* ── EXPLAIN TAB ──────────────────────────────────────────────────────────── */
+
+async function explainTerm() {
+  const input   = document.getElementById("explainInput");
+  const panel   = document.getElementById("explainContent");
+  const paper   = ensureActivePaper();
+
+  if (!input || !panel) return;
+
+  const term = input.value.trim();
+
+  if (!term) {
+    showToast("Please type a term to explain");
+    return;
+  }
+
+  if (!paper) {
+    showToast("Upload or select a paper first");
+    return;
+  }
+
+  // Show loading state
+  clearElement(panel);
+  panel.appendChild(makeComingSoonBox(
+    "🔍",
+    "Looking up term...",
+    `Searching the paper and generating explanation for "${term}". This may take a few seconds.`
+  ));
+
+  try {
+    const data = await fetchJson("/api/explain", {
+      method: "POST",
+      body: JSON.stringify({
+        term:       term,
+        paper_path: getPaperPath(paper),
+      }),
+    });
+
+    renderExplainResult(data);
+
+  } catch (error) {
+    clearElement(panel);
+    panel.appendChild(makeComingSoonBox(
+      "❌",
+      "Explanation Failed",
+      error.message || "Could not explain this term. Check your API key and try again."
+    ));
+  }
+}
+
+function renderExplainResult(data) {
+  const panel = document.getElementById("explainContent");
+  if (!panel) return;
+  clearElement(panel);
+
+  const { term, from_paper, simple_explanation, chunks_used, found_in_paper } = data;
+
+  // ── Status badge ──────────────────────────────────────────────────────────
+  const badge = document.createElement("div");
+  badge.style.cssText = `
+    display:inline-flex;align-items:center;gap:6px;
+    padding:4px 12px;border-radius:99px;font-size:11px;font-weight:600;
+    margin-bottom:16px;
+    ${found_in_paper
+      ? "background:var(--green-soft);color:var(--green);border:1px solid var(--green);"
+      : "background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber);"}
+  `;
+  badge.textContent = found_in_paper
+    ? `Found in paper (${chunks_used} relevant section${chunks_used !== 1 ? "s" : ""})`
+    : "Not found in paper — using general knowledge";
+  panel.appendChild(badge);
+
+  // ── Term heading ──────────────────────────────────────────────────────────
+  const heading = document.createElement("div");
+  heading.style.cssText = `
+    font-size:22px;font-weight:700;color:var(--text);
+    margin-bottom:20px;letter-spacing:-0.3px;
+  `;
+  heading.textContent = term.charAt(0).toUpperCase() + term.slice(1);
+  panel.appendChild(heading);
+
+  // ── Card builder ──────────────────────────────────────────────────────────
+  function makeCard(icon, title, content, accentColor) {
+    const card = document.createElement("div");
+    card.style.cssText = `
+      background:var(--surface);border:1px solid var(--border);
+      border-radius:var(--radius-lg);padding:18px 20px;
+      margin-bottom:14px;border-left:3px solid ${accentColor};
+    `;
+
+    const cardHeader = document.createElement("div");
+    cardHeader.style.cssText = `
+      display:flex;align-items:center;gap:8px;
+      font-size:12px;font-weight:600;color:var(--text2);
+      text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;
+    `;
+    cardHeader.innerHTML = `<span style="font-size:16px;">${icon}</span>${title}`;
+
+    const cardBody = document.createElement("div");
+    cardBody.style.cssText = `
+      font-size:13.5px;color:var(--text);line-height:1.75;
+    `;
+    cardBody.textContent = content;
+
+    card.appendChild(cardHeader);
+    card.appendChild(cardBody);
+    return card;
+  }
+
+  // ── From paper card ───────────────────────────────────────────────────────
+  panel.appendChild(makeCard(
+    "📄",
+    "From This Paper",
+    from_paper,
+    "var(--accent)"
+  ));
+
+  // ── Simple explanation card ───────────────────────────────────────────────
+  panel.appendChild(makeCard(
+    "💡",
+    "In Simple Words",
+    simple_explanation,
+    "var(--green)"
+  ));
+
+  // ── Try another term hint ─────────────────────────────────────────────────
+  const hint = document.createElement("div");
+  hint.style.cssText = `
+    text-align:center;font-size:11.5px;color:var(--text3);
+    margin-top:8px;padding:10px;
+  `;
+  hint.textContent = "Try another term above ↑";
+  panel.appendChild(hint);
+}
+
+function handleExplainKey(event) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void explainTerm();
+  }
+}
+
 window.toggleDark  = toggleDark;
 window.switchTab   = switchTab;
 window.handleKey   = handleKey;
 window.sendMessage = sendMessage;
 window.changePage  = changePage;
+// ADD these two lines alongside the existing window.* lines:
+window.explainTerm     = explainTerm;
+window.handleExplainKey = handleExplainKey;

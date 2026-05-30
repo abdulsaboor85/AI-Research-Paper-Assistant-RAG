@@ -477,6 +477,77 @@ def api_prerequisites():
 
 
 # =========================================================
+# EXPLAIN TERM
+# =========================================================
+
+@app.post("/api/explain")
+def api_explain() -> Any:
+
+    try:
+
+        from term_explainer import explain_term
+        from retriever import retrieve_relevant_chunks
+
+        data = request.get_json(silent=True) or {}
+
+        term = (data.get("term") or "").strip()
+
+        if not term:
+            return jsonify({
+                "error": "term is required."
+            }), 400
+
+        raw_path = (
+            data.get("paper_path")
+            or data.get("path")
+            or data.get("paperId")
+        )
+
+        if not raw_path:
+            return jsonify({
+                "error": "paper_path is required."
+            }), 400
+
+        pdf_path = normalize_pdf_path(str(raw_path))
+
+        collection_name = collection_name_from_path(pdf_path)
+
+        api_key = os.getenv("GEMINI_API_KEY")
+
+        if not api_key:
+            return jsonify({
+                "error": "GEMINI_API_KEY missing in .env"
+            }), 500
+
+        # Use term itself as the search query
+        chunks = retrieve_relevant_chunks(
+            term,
+            collection_name=collection_name,
+            top_k=5,
+        )
+
+        result = explain_term(
+            term=term,
+            chunks=chunks,
+            api_key=api_key,
+            paper_title=pdf_path.stem,
+        )
+
+        return jsonify(result)
+
+    except Exception as exc:
+
+        print("\nEXPLAIN ERROR:")
+        print(exc)
+
+        import traceback
+        traceback.print_exc()
+
+        return jsonify({
+            "error": str(exc)
+        }), 400
+
+# =========================================================
 # TEST ROUTE
 # =========================================================
 
