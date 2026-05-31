@@ -1,6 +1,6 @@
 """
 ====================================================
- PATH  →  pipeline/difficulty_scorer.py
+ PATH  ->  pipeline/difficulty_scorer.py
 ====================================================
 
 FYP Module  : AI-Powered Research Paper Assistant (RAG)
@@ -9,11 +9,10 @@ Author      : Abdul Saboor
 
 Computes paper difficulty across 4 dimensions:
 
-  1. Readability       — Flesch-Kincaid Grade Level (syllables + sentence length)
-  2. Uncommon Words    — wordfreq real-world frequency (low freq = uncommon)
-  3. Technical Terms   — KeyBERT keyword extraction using BAAI/bge-base-en-v1.5
-                         (same model already loaded in embedder.py — no extra cost)
-  4. LLM Perception    — Gemini model pool, tries each until one succeeds
+  1. Readability       -- Flesch-Kincaid Grade Level + Flesch Reading Ease
+  2. Uncommon Words    -- wordfreq real-world frequency
+  3. Technical Terms   -- KeyBERT with BAAI/bge-base-en-v1.5 (same model as embedder)
+  4. LLM Perception    -- Gemini model pool with retry + fallback logic
 """
 
 import re
@@ -26,21 +25,17 @@ from google import genai
 from model_config import GEMINI_MODEL_POOL, MAX_RETRIES_PER_MODEL, RETRY_DELAY_SECONDS
 
 from wordfreq import word_frequency
-from nltk.corpus import words as nltk_words
 from nltk.tokenize import sent_tokenize, word_tokenize
 
 # ── NLTK one-time downloads ──────────────────────────────────────────────────
-for pkg in ("words", "punkt", "punkt_tab", "wordnet", "omw-1.4"):
+for pkg in ("punkt", "punkt_tab", "wordnet", "omw-1.4"):
     nltk.download(pkg, quiet=True)
 
-# ── NLTK common words corpus ─────────────────────────────────────────────────
-COMMON_WORDS: set = {w.lower() for w in nltk_words.words()}
-
-# ── KeyBERT — reuse the same embedding model already used by embedder.py ─────
-# This means NO extra model download, NO extra memory beyond what's already loaded
+# ── KeyBERT — reuses BAAI/bge-base-en-v1.5 already used in embedder.py ──────
+# No extra model download. No extra memory cost.
 print("  [DifficultyScorer] Loading KeyBERT with BAAI/bge-base-en-v1.5...")
 _EMBEDDING_MODEL = SentenceTransformer("BAAI/bge-base-en-v1.5")
-KW_MODEL = KeyBERT(model=_EMBEDDING_MODEL)
+KW_MODEL         = KeyBERT(model=_EMBEDDING_MODEL)
 print("  [DifficultyScorer] KeyBERT ready.")
 
 # ── Difficulty label thresholds ──────────────────────────────────────────────
@@ -50,7 +45,7 @@ DIFFICULTY_LABELS = [
     (10.0, "Hard"),
 ]
 
-# ── Score weights (must sum to 1.0) ─────────────────────────────────────────
+# ── Score weights (must sum to 1.0) ──────────────────────────────────────────
 WEIGHTS = {
     "readability":     0.10,
     "uncommon_words":  0.10,
@@ -58,21 +53,19 @@ WEIGHTS = {
     "llm_perception":  0.70,
 }
 
-# ── wordfreq uncommon threshold ───────────────────────────────────────────────
+# ── wordfreq threshold — words below this frequency are uncommon ──────────────
+# "neural"            -> 0.000008  (uncommon, counted)
+# "backpropagation"   -> 0.0000004 (uncommon, counted)
+# "learning"          -> 0.00012   (common,   ignored)
 UNCOMMON_FREQ_THRESHOLD = 0.000008
 
-# ── KeyBERT extraction settings ──────────────────────────────────────────────
-# top_n      : how many keywords to extract per paper
-# keyphrase_ngram_range : (1,2) means single words AND two-word phrases
-#                         e.g. "attention mechanism", "gradient descent"
-# stop_words : removes common English words automatically
-# diversity  : 0.7 means keywords are diverse (not all similar to each other)
-KEYBERT_TOP_N              = 30
-KEYBERT_NGRAM_RANGE        = (1, 2)
-KEYBERT_STOP_WORDS         = "english"
-KEYBERT_DIVERSITY          = 0.7
-# Text limit sent to KeyBERT — first 8000 chars covers abstract + intro + body
-KEYBERT_TEXT_LIMIT         = 8000
+# ── KeyBERT settings ──────────────────────────────────────────────────────────
+KEYBERT_TOP_N        = 30        # extract top 30 keyphrases per paper
+KEYBERT_NGRAM_RANGE  = (1, 2)   # single words AND two-word phrases
+KEYBERT_STOP_WORDS   = "english" # auto-remove common English words
+KEYBERT_DIVERSITY    = 0.7       # MMR diversity — avoids repetitive results
+KEYBERT_TEXT_LIMIT   = 8000      # chars sent to KeyBERT (abstract + intro + body start)
+KEYBERT_MIN_SCORE    = 0.3       # minimum relevance score to keep a keyphrase
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -85,9 +78,9 @@ def _count_syllables(word: str) -> int:
     Counts vowel groups, subtracts silent trailing 'e'.
     Returns minimum 1.
     """
-    word = word.lower().strip(".,;:!?\"'")
-    vowels = "aeiouy"
-    count = 0
+    word           = word.lower().strip(".,;:!?\"'")
+    vowels         = "aeiouy"
+    count          = 0
     prev_was_vowel = False
 
     for ch in word:
@@ -108,26 +101,20 @@ def _count_syllables(word: str) -> int:
 
 def compute_readability_score(text: str) -> tuple:
     """
-    Computes a readability difficulty score using both Flesch-Kincaid Grade
-    Level and Flesch Reading Ease.
+    Blends Flesch-Kincaid Grade Level and Flesch Reading Ease into
+    a single 0-10 difficulty score.
 
-    Flesch-Kincaid Grade Level formula:
-        FK = 0.39 * ASL + 11.8 * ASW - 15.59
-
-    Flesch Reading Ease formula:
-        FRE = 206.835 - 1.015 * ASL - 84.6 * ASW
+    FK Grade  = 0.39 * ASL + 11.8 * ASW - 15.59
+    FRE Score = 206.835 - 1.015 * ASL - 84.6 * ASW
 
     ASL = average sentence length (words per sentence)
     ASW = average syllables per word
 
     Returns:
-        tuple: (readability_score, fk_grade, fre_score)
-        - readability_score: 0-10 blended difficulty score
-        - fk_grade: raw Flesch-Kincaid grade level
-        - fre_score: 0-100 Flesch Reading Ease
+        tuple: (readability_score 0-10, fk_grade raw, fre_score 0-100)
     """
     sentences = sent_tokenize(text)
-    words = [w for w in word_tokenize(text) if w.isalpha()]
+    words     = [w for w in word_tokenize(text) if w.isalpha()]
 
     if not sentences or not words:
         return 5.0, 5.0, 50.0
@@ -152,12 +139,12 @@ def compute_readability_score(text: str) -> tuple:
 
 def compute_uncommon_word_score(text: str) -> float:
     """
-    Uses wordfreq to measure real-world English word frequency.
-    A word is uncommon if its frequency is below UNCOMMON_FREQ_THRESHOLD.
+    Uses wordfreq real-world frequency to identify uncommon words.
+    Words below UNCOMMON_FREQ_THRESHOLD are counted as uncommon.
 
     Calibration:
-        0%  uncommon → score 0
-        50%+ uncommon → score 10
+        0%   uncommon words -> score 0
+        50%+ uncommon words -> score 10
     """
     words = [
         w for w in word_tokenize(text.lower())
@@ -169,7 +156,7 @@ def compute_uncommon_word_score(text: str) -> float:
 
     uncommon_count = sum(
         1 for w in words
-        if word_frequency(w, 'en') < UNCOMMON_FREQ_THRESHOLD
+        if word_frequency(w, "en") < UNCOMMON_FREQ_THRESHOLD
     )
 
     ratio = uncommon_count / len(words)
@@ -182,23 +169,22 @@ def compute_uncommon_word_score(text: str) -> float:
 #  COMPONENT 3: Technical Term Score (KeyBERT)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def extract_technical_terms(text: str) -> set[str]:
+def extract_technical_terms(text: str) -> list[tuple[str, float]]:
     """
     Uses KeyBERT with BAAI/bge-base-en-v1.5 to extract meaningful
     technical keywords and keyphrases from the paper.
 
-    Why KeyBERT over scispaCy?
-    - scispaCy is trained on biomedical text only — it misses CS/ML terms
-      like "softmax", "encoder", "attention", "gradient descent" entirely.
-    - KeyBERT is domain-agnostic — it uses embedding similarity to find
-      the most semantically important terms in ANY paper regardless of field.
-    - We reuse the same BAAI/bge-base-en-v1.5 model already loaded in
-      embedder.py, so there is zero extra memory or download cost.
+    Why KeyBERT instead of scispaCy:
+    - scispaCy is trained only on biomedical text. It misses CS/ML terms
+      like softmax, encoder, attention, gradient descent completely.
+    - KeyBERT uses embedding similarity and is fully domain-agnostic.
+      It finds the most semantically important terms in ANY paper.
+    - We reuse the same model already loaded in embedder.py so there
+      is zero extra memory or download cost.
 
     Returns:
-        set of unique technical keyword strings extracted from the paper
+        list of (keyphrase, relevance_score) tuples above KEYBERT_MIN_SCORE
     """
-    # Use first KEYBERT_TEXT_LIMIT chars — covers abstract + intro + body start
     sample_text = text[:KEYBERT_TEXT_LIMIT]
 
     try:
@@ -207,42 +193,33 @@ def extract_technical_terms(text: str) -> set[str]:
             keyphrase_ngram_range=KEYBERT_NGRAM_RANGE,
             stop_words=KEYBERT_STOP_WORDS,
             top_n=KEYBERT_TOP_N,
-            use_mmr=True,          # MMR = Maximal Marginal Relevance
-                                   # ensures diverse keywords, not repetitive ones
+            use_mmr=True,
             diversity=KEYBERT_DIVERSITY,
         )
 
-        # keywords is a list of (keyword_string, relevance_score) tuples
-        # We only keep keywords with a relevance score above 0.3
-        # to filter out weak/generic matches
-        technical_terms = {
-            kw for kw, score in keywords
-            if score > 0.3
-        }
-
-        return technical_terms
+        return [(kw, score) for kw, score in keywords if score > KEYBERT_MIN_SCORE]
 
     except Exception as e:
         print(f"  [KeyBERT] extraction failed: {e}")
-        return set()
+        return []
 
 
-def compute_technical_term_score(text: str) -> float:
+def compute_technical_term_score(text: str) -> tuple[float, int, list[str]]:
     """
     Scores technical density using KeyBERT keyword extraction.
 
-    How it works:
-    1. KeyBERT extracts the top 30 most technically significant
-       keywords/keyphrases from the paper using embedding similarity.
-    2. We count unique terms found.
-    3. We normalize against total word count to get a density ratio.
-    4. Density is scaled to 0-10.
+    Steps:
+    1. KeyBERT extracts top 30 keyphrases using embedding similarity.
+    2. Individual words from each keyphrase are collected into a term-word set.
+    3. Count how many tokens in the full text match those term-words.
+    4. Density = matched tokens / total tokens, scaled to 0-10.
 
     Calibration:
-        0    unique technical terms → score 0
-        20%+ unique technical terms → score 10
+        0    technical density -> score 0
+        20%+ technical density -> score 10
 
-    This replaces scispaCy which was domain-locked to biomedical text.
+    Returns:
+        tuple: (score 0-10, unique_keyphrases_count, keyphrases_list)
     """
     words = [
         w for w in word_tokenize(text.lower())
@@ -250,79 +227,86 @@ def compute_technical_term_score(text: str) -> float:
     ]
 
     if not words:
-        return 5.0
+        return 5.0, 0, []
 
-    technical_terms = extract_technical_terms(text)
+    extracted = extract_technical_terms(text)
 
-    if not technical_terms:
-        return 0.0
+    if not extracted:
+        return 0.0, 0, []
 
-    # Count how many tokens in the full text match our extracted terms
-    # This gives us a proper density measure rather than just counting
-    # the number of unique terms
+    # Collect individual words from all keyphrases (length > 3 to skip noise)
     term_words = set()
-    for term in technical_terms:
-        for word in term.split():
+    for keyphrase, _ in extracted:
+        for word in keyphrase.split():
             if len(word) > 3:
                 term_words.add(word.lower())
 
     matched_tokens = sum(1 for w in words if w in term_words)
-    density = matched_tokens / len(words)
+    density        = matched_tokens / len(words)
+    score          = min(10.0, (density / 0.20) * 10.0)
+    keyphrases     = [kw for kw, _ in extracted]
 
-    score = min(10.0, (density / 0.20) * 10.0)
-
-    return round(score, 2)
+    return round(score, 2), len(extracted), keyphrases
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  COMPONENT 4: LLM Perception Score (Shared Gemini Model Pool)
+#  COMPONENT 4: LLM Perception Score (Gemini Model Pool)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def compute_llm_score(opening_text: str, api_key: str) -> int:
     """
     Sends the opening portion of the paper to Gemini for difficulty assessment.
 
-    Uses shared GEMINI_MODEL_POOL from model_config.py — tries each model
-    in order of quota availability. Falls back to 5 only if every model fails.
+    Uses shared GEMINI_MODEL_POOL from model_config.py.
+    Tries each model in order. Falls back to 5 if every model fails.
 
-    Pool order (by free RPD, highest first):
-        1. gemini-3.1-flash-lite  →  500 RPD
-        2. gemini-2.5-flash       →   23 RPD
-        3. gemini-3-flash         →   20 RPD
-        4. gemini-2.5-flash-lite  →   20 RPD
+    The scale is carefully worded to produce accurate ratings:
+    - Papers proposing novel architectures score 7-8 (deep prior knowledge needed)
+    - Papers applying existing methods score 5-6
+    - Heavy math/notation papers add 1-2 to the base score
 
     Args:
-        opening_text (str): The abstract/introduction portion of the paper
-        api_key (str): Gemini API key
+        opening_text (str): Abstract + introduction of the paper
+        api_key      (str): Gemini API key
 
     Returns:
-        int: Difficulty score 1-10 (or 5 if all models fail)
+        int: Difficulty score 1-10 (fallback 5 if all models fail)
     """
     client = genai.Client(api_key=api_key)
 
-    prompt = f"""You are an expert academic evaluator assessing research paper difficulty.
+    prompt = f"""You are a strict academic difficulty evaluator assessing research papers.
 
-Below is the opening section of a research paper.
-Rate how difficult this paper is to understand on a scale of 1 to 10.
+Read the opening section of this research paper and rate how difficult it is
+for a reader to fully understand on a scale of 1 to 10.
 
-Scale:
-  1-2  = Very easy (plain English, no prior knowledge needed)
-  3-4  = Easy (undergraduate level, clear explanations)
-  5-6  = Moderate (graduate level, some domain knowledge assumed)
-  7-8  = Hard (expert audience, dense concepts and notation)
-  9-10 = Very hard (highly specialized, assumes deep domain expertise)
+SCALE DEFINITION (read carefully before scoring):
+  1-2  = Beginner friendly. Plain English. No technical background needed.
+          Example: a blog post explaining what machine learning is.
+  3-4  = Undergraduate level. Concepts are explained as they are introduced.
+          Assumes basic math and programming knowledge only.
+          Example: an introductory ML textbook chapter.
+  5-6  = Graduate level. Assumes the reader already knows the field foundations.
+          Uses technical terms without defining them. Dense with ideas.
+          Example: a survey paper summarizing existing methods.
+  7-8  = Expert level. Proposes novel methods or architectures.
+          Assumes deep domain expertise. Heavy notation and formalism.
+          Requires significant prior reading to understand.
+          Example: a paper introducing a new neural architecture like Transformers.
+  9-10 = Highly specialized. Assumes mastery of multiple advanced subfields.
+          Incomprehensible without years of domain expertise.
+          Example: a theoretical proof-heavy paper in a niche research area.
 
-Consider:
-- Conceptual complexity and abstraction level
-- Density of ideas per paragraph
-- Amount of assumed prior knowledge
-- Use of specialized notation or formalism
-- Vocabulary complexity
+SCORING RULES:
+- If the paper PROPOSES something new (new model, method, architecture),
+  score at least 7 because understanding it requires knowing what came before.
+- If the paper APPLIES existing methods to a new dataset, score 5-6.
+- If the paper is heavy with mathematical notation or formal proofs, add 1-2.
+- Do NOT be overly conservative. Most published research papers score 6-9.
 
 Paper Opening:
 {opening_text[:3000]}
 
-IMPORTANT: Respond with ONLY a single integer between 1 and 10. No explanation. No extra words."""
+IMPORTANT: Reply with ONLY a single integer from 1 to 10. No explanation. No extra text."""
 
     for model_name in GEMINI_MODEL_POOL:
         for attempt in range(1, MAX_RETRIES_PER_MODEL + 1):
@@ -334,7 +318,7 @@ IMPORTANT: Respond with ONLY a single integer between 1 and 10. No explanation. 
                     contents=prompt,
                 )
 
-                raw = response.text.strip()
+                raw   = response.text.strip()
                 match = re.search(r'\b(\d+)\b', raw)
 
                 if match:
@@ -369,7 +353,7 @@ IMPORTANT: Respond with ONLY a single integer between 1 and 10. No explanation. 
 
         print(f"  [LLM] Moving to next model in pool...")
 
-    print(f"  [LLM] All models exhausted. Using fallback score of 5.")
+    print("  [LLM] All models exhausted. Using fallback score of 5.")
     return 5
 
 
@@ -382,15 +366,15 @@ def extract_opening_text(full_text: str) -> str:
     Extracts the most useful opening portion of the paper for LLM scoring.
 
     Strategy:
-      1. Both Abstract + Introduction headings found -> slice that range
+      1. Both Abstract + Introduction found -> slice that full range
       2. Only one heading found -> slice from that heading
-      3. No headings found -> use first 3000 chars of raw text
+      3. No headings -> use first 3000 chars
     """
-    abstract_pattern     = re.compile(r'\bAbstract\b', re.IGNORECASE)
+    abstract_pattern     = re.compile(r'\bAbstract\b',              re.IGNORECASE)
     intro_pattern        = re.compile(r'\b(1\.?\s*)?Introduction\b', re.IGNORECASE)
     next_section_pattern = re.compile(
         r'\b(2\.?\s*\w+|Related Work|Background|Methodology|Literature Review)\b',
-        re.IGNORECASE
+        re.IGNORECASE,
     )
 
     abs_match   = abstract_pattern.search(full_text)
@@ -424,8 +408,8 @@ def analyze_difficulty(full_text: str, api_key: str) -> dict:
     Main entry point for the Difficulty Score feature.
 
     Args:
-        full_text (str) : Full extracted paper text from PyMuPDF / pdfplumber
-        api_key   (str) : Gemini API key loaded from .env
+        full_text (str) : Full extracted paper text
+        api_key   (str) : Gemini API key from .env
 
     Returns:
         dict: {
@@ -439,12 +423,12 @@ def analyze_difficulty(full_text: str, api_key: str) -> dict:
             "final_score":      float,      # 0.0 - 10.0
             "difficulty_label": str,        # Easy / Medium / Hard / Very Hard
             "breakdown": {
-                "total_sentences":      int,
-                "total_words":          int,
-                "uncommon_word_pct":    float,
-                "technical_term_pct":   float,
-                "flesch_kincaid_grade": float,
-                "flesch_reading_ease":  float,
+                "total_sentences":       int,
+                "total_words":           int,
+                "uncommon_word_pct":     float,
+                "technical_keyphrases":  int,   # count of unique keyphrases found
+                "flesch_kincaid_grade":  float,
+                "flesch_reading_ease":   float,
             }
         }
     """
@@ -452,11 +436,11 @@ def analyze_difficulty(full_text: str, api_key: str) -> dict:
     # ── Extract opening text for LLM ─────────────────────────────────────────
     opening_text = extract_opening_text(full_text)
 
-    # ── Compute all component scores ──────────────────────────────────────────
-    r_score, fk_grade, fre_score = compute_readability_score(full_text)
-    u_score  = compute_uncommon_word_score(full_text)
-    t_score  = compute_technical_term_score(full_text)
-    l_score  = compute_llm_score(opening_text, api_key)
+    # ── Compute all four component scores ────────────────────────────────────
+    r_score, fk_grade, fre_score          = compute_readability_score(full_text)
+    u_score                               = compute_uncommon_word_score(full_text)
+    t_score, keyphrases_count, _          = compute_technical_term_score(full_text)
+    l_score                               = compute_llm_score(opening_text, api_key)
 
     # ── Weighted final score ──────────────────────────────────────────────────
     final = round(
@@ -464,7 +448,7 @@ def analyze_difficulty(full_text: str, api_key: str) -> dict:
         u_score * WEIGHTS["uncommon_words"]  +
         t_score * WEIGHTS["technical_terms"] +
         l_score * WEIGHTS["llm_perception"],
-        2
+        2,
     )
 
     # ── Difficulty label ──────────────────────────────────────────────────────
@@ -484,13 +468,10 @@ def analyze_difficulty(full_text: str, api_key: str) -> dict:
     uncommon_pct = round(
         sum(
             1 for w in all_words
-            if word_frequency(w, 'en') < UNCOMMON_FREQ_THRESHOLD
+            if word_frequency(w, "en") < UNCOMMON_FREQ_THRESHOLD
         ) / max(len(all_words), 1) * 100,
-        1
+        1,
     )
-
-    technical_terms = extract_technical_terms(full_text)
-    technical_pct   = round(len(technical_terms) / max(len(all_words), 1) * 100, 1)
 
     return {
         "scores": {
@@ -506,7 +487,7 @@ def analyze_difficulty(full_text: str, api_key: str) -> dict:
             "total_sentences":      len(sentences),
             "total_words":          len(all_words),
             "uncommon_word_pct":    uncommon_pct,
-            "technical_term_pct":   technical_pct,
+            "technical_keyphrases": keyphrases_count,
             "flesch_kincaid_grade": fk_grade,
             "flesch_reading_ease":  fre_score,
         },

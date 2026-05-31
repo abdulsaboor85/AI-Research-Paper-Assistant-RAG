@@ -1,10 +1,9 @@
 /* ==========================================================================
    PaperMind — Flask-backed frontend
-   Tabs: Chat | Summary (coming soon) | Insights (difficulty score) |
-         Prerequisites (Gemini roadmap) | Comparison (coming soon)
+   Tabs: Chat | Summary | Insights | Prerequisites | Explain | Comparison
    ========================================================================== */
 
-const API_BASE = "http://127.0.0.1:5000";
+const API_BASE    = "http://127.0.0.1:5000";
 const STORAGE_KEYS = {
   darkMode:      "papermind_darkMode",
   pdfPanelWidth: "papermind_pdfPanelWidth",
@@ -12,16 +11,16 @@ const STORAGE_KEYS = {
 };
 
 const state = {
-  isDark:        false,
-  thinking:      false,
-  currentPage:   0,
-  totalPages:    0,
-  papers:        [],
-  activePaperId: null,
+  isDark:         false,
+  thinking:       false,
+  currentPage:    0,
+  totalPages:     0,
+  papers:         [],
+  activePaperId:  null,
   loadingPaperId: null,
 };
 
-/* ── helpers ──────────────────────────────────────────────────────────────── */
+/* ── Helpers ──────────────────────────────────────────────────────────────── */
 
 function apiUrl(path) { return `${API_BASE}${path}`; }
 
@@ -80,7 +79,7 @@ function showToast(message) {
   const container = document.getElementById("toastContainer");
   if (!container) return;
   const el = document.createElement("div");
-  el.className = "toast";
+  el.className   = "toast";
   el.textContent = message;
   container.appendChild(el);
   setTimeout(() => el.remove(), 3200);
@@ -111,29 +110,31 @@ function renderPapers() {
   if (!state.papers.length) {
     const empty = document.createElement("div");
     empty.style.cssText = "padding:16px;text-align:center;color:var(--text3);font-size:12px;";
-    empty.textContent = "No papers available";
+    empty.textContent   = "No papers yet — upload one to get started";
     list.appendChild(empty);
     return;
   }
 
   state.papers.forEach(paper => {
     const paperId = getPaperId(paper);
-    const item = document.createElement("div");
+    const item    = document.createElement("div");
     item.className = `paper-item${paper.active ? " active" : ""}`;
 
     const dot = document.createElement("div");
     dot.className = `paper-dot ${paper.status === "ready" ? "ready" : "indexing"}`;
 
-    const info = document.createElement("div");
+    const info  = document.createElement("div");
     info.className = "paper-info";
 
     const title = document.createElement("div");
-    title.className = "paper-title";
+    title.className   = "paper-title";
     title.textContent = getPaperTitle(paper);
 
+    // meta row — empty, no score shown in sidebar
     const meta = document.createElement("div");
-    meta.className = "paper-meta";
-    meta.textContent = "";  
+    meta.className   = "paper-meta";
+    meta.textContent = "";
+
     info.appendChild(title);
     info.appendChild(meta);
     item.appendChild(dot);
@@ -147,12 +148,7 @@ function updatePdfHeader(paper) {
   const el = document.getElementById("pdfTitle");
   if (!el) return;
   if (!paper) { el.textContent = "Select a paper to view"; return; }
-  const score = getPaperScore(paper);
-  const label = getPaperLabel(paper);
-  const parts = [getPaperTitle(paper)];
-  if (score !== null) parts.push(`${formatScore(score)}/10`);
-  if (label) parts.push(label);
-  el.textContent = parts.join(" · ");
+  el.textContent = getPaperTitle(paper);
 }
 
 /* ── INSIGHTS TAB ─────────────────────────────────────────────────────────── */
@@ -175,8 +171,8 @@ function renderInsights(paper) {
     return;
   }
 
-  const score  = getPaperScore(paper);
-  const label  = getPaperLabel(paper);
+  const score     = getPaperScore(paper);
+  const label     = getPaperLabel(paper);
   const scores    = analysis.scores    || {};
   const breakdown = analysis.breakdown || {};
 
@@ -193,7 +189,7 @@ function renderInsights(paper) {
     return wrap;
   }
 
-  /* hero */
+  /* hero card */
   const hero = document.createElement("div");
   hero.style.cssText = `background:var(--surface);border:1px solid var(--border);
     border-radius:var(--radius-lg);padding:24px;margin-bottom:16px;
@@ -210,9 +206,10 @@ function renderInsights(paper) {
         padding:4px 12px;border-radius:99px;font-size:12px;font-weight:600;">${label || "Unknown"}</span>
     </div>`;
 
-  const pct = score !== null ? Math.round((score / 10) * 100) : 0;
+  const pct    = score !== null ? Math.round((score / 10) * 100) : 0;
   const circ   = 2 * Math.PI * 36;
   const offset = circ - (pct / 100) * circ;
+
   const heroRight = document.createElement("div");
   heroRight.innerHTML = `
     <svg width="90" height="90" viewBox="0 0 90 90">
@@ -240,7 +237,7 @@ function renderInsights(paper) {
     border-radius:var(--radius-lg);padding:18px;margin-bottom:16px;`;
   const compTitle = document.createElement("div");
   compTitle.style.cssText = "font-size:13px;font-weight:600;margin-bottom:16px;color:var(--text);";
-  compTitle.textContent = "Component Scores";
+  compTitle.textContent   = "Component Scores";
   compCard.appendChild(compTitle);
 
   components.forEach(({ key, label: lbl, weight, icon }) => {
@@ -266,20 +263,21 @@ function renderInsights(paper) {
     border-radius:var(--radius-lg);padding:18px;`;
   const statsTitle = document.createElement("div");
   statsTitle.style.cssText = "font-size:13px;font-weight:600;margin-bottom:14px;color:var(--text);";
-  statsTitle.textContent = "Paper Statistics";
+  statsTitle.textContent   = "Paper Statistics";
   statsCard.appendChild(statsTitle);
 
   const stats = [
-    ["Total Sentences",      breakdown.total_sentences    ?? "N/A"],
-    ["Total Words",          breakdown.total_words         ?? "N/A"],
-    ["Uncommon Word %",      breakdown.uncommon_word_pct  != null ? `${breakdown.uncommon_word_pct}%`  : "N/A"],
-    ["Technical Term %",     breakdown.technical_term_pct != null ? `${breakdown.technical_term_pct}%` : "N/A"],
-    ["Flesch-Kincaid Grade", breakdown.flesch_kincaid_grade ?? "N/A"],
-    ["Flesch Reading Ease",  breakdown.flesch_reading_ease  ?? "N/A"],
+    ["Total Sentences",      breakdown.total_sentences       ?? "N/A"],
+    ["Total Words",          breakdown.total_words            ?? "N/A"],
+    ["Uncommon Word %",      breakdown.uncommon_word_pct     != null ? `${breakdown.uncommon_word_pct}%` : "N/A"],
+    ["Technical Keyphrases", breakdown.technical_keyphrases  ?? "N/A"],
+    ["Flesch-Kincaid Grade", breakdown.flesch_kincaid_grade  ?? "N/A"],
+    ["Flesch Reading Ease",  breakdown.flesch_reading_ease   ?? "N/A"],
   ];
 
   const grid = document.createElement("div");
   grid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:10px;";
+
   stats.forEach(([statLabel, statVal]) => {
     const cell = document.createElement("div");
     cell.style.cssText = "background:var(--surface2);border-radius:var(--radius);padding:10px 12px;";
@@ -288,6 +286,7 @@ function renderInsights(paper) {
       <div style="font-size:15px;font-weight:600;color:var(--text);margin-top:2px;">${statVal}</div>`;
     grid.appendChild(cell);
   });
+
   statsCard.appendChild(grid);
   panel.appendChild(statsCard);
 }
@@ -305,7 +304,6 @@ function renderPrerequisites(text) {
     return;
   }
 
-  /* info banner */
   const banner = document.createElement("div");
   banner.style.cssText = `background:var(--accent-soft);border:1px solid var(--accent-border);
     border-radius:var(--radius-lg);padding:14px 18px;margin-bottom:16px;
@@ -320,9 +318,9 @@ function renderPrerequisites(text) {
     </div>`;
   panel.appendChild(banner);
 
-  /* parse Gemini numbered list */
   const lines = text.trim().split("\n").filter(l => l.trim());
   const items = [];
+
   lines.forEach(line => {
     const m = line.match(/^\s*(\d+)[.)]\s*(.+)/);
     if (!m) return;
@@ -335,7 +333,6 @@ function renderPrerequisites(text) {
   });
 
   if (!items.length) {
-    /* fallback: raw text */
     const raw = document.createElement("div");
     raw.style.cssText = `background:var(--surface);border:1px solid var(--border);
       border-radius:var(--radius-lg);padding:18px;white-space:pre-wrap;
@@ -379,14 +376,14 @@ function renderPrerequisites(text) {
     content.style.cssText = "flex:1;min-width:0;";
 
     const conceptEl = document.createElement("div");
-    conceptEl.style.cssText = "font-size:13px;font-weight:600;color:var(--text);margin-bottom:3px;";
-    conceptEl.textContent = item.concept;
+    conceptEl.style.cssText   = "font-size:13px;font-weight:600;color:var(--text);margin-bottom:3px;";
+    conceptEl.textContent     = item.concept;
     content.appendChild(conceptEl);
 
     if (item.explanation) {
       const explEl = document.createElement("div");
       explEl.style.cssText = "font-size:12px;color:var(--text2);line-height:1.6;";
-      explEl.textContent = item.explanation;
+      explEl.textContent   = item.explanation;
       content.appendChild(explEl);
     }
 
@@ -395,7 +392,6 @@ function renderPrerequisites(text) {
     panel.appendChild(card);
   });
 
-  /* legend */
   const legend = document.createElement("div");
   legend.style.cssText = "display:flex;gap:16px;margin-top:6px;padding:10px 4px;";
   legend.innerHTML = `
@@ -411,7 +407,109 @@ function renderPrerequisites(text) {
   panel.appendChild(legend);
 }
 
-/* ── SUMMARY coming soon ──────────────────────────────────────────────────── */
+/* ── EXPLAIN TAB ──────────────────────────────────────────────────────────── */
+
+async function explainTerm() {
+  const input = document.getElementById("explainInput");
+  const panel = document.getElementById("explainContent");
+  const paper = ensureActivePaper();
+
+  if (!input || !panel) return;
+
+  const term = input.value.trim();
+
+  if (!term) { showToast("Please type a term to explain"); return; }
+  if (!paper) { showToast("Upload or select a paper first"); return; }
+
+  clearElement(panel);
+  panel.appendChild(makeComingSoonBox(
+    "🔍",
+    "Looking up term...",
+    `Searching the paper and generating explanation for "${term}". This may take a few seconds.`
+  ));
+
+  try {
+    const data = await fetchJson("/api/explain", {
+      method: "POST",
+      body: JSON.stringify({ term, paper_path: getPaperPath(paper) }),
+    });
+    renderExplainResult(data);
+  } catch (error) {
+    clearElement(panel);
+    panel.appendChild(makeComingSoonBox(
+      "❌",
+      "Explanation Failed",
+      error.message || "Could not explain this term. Check your API key and try again."
+    ));
+  }
+}
+
+function renderExplainResult(data) {
+  const panel = document.getElementById("explainContent");
+  if (!panel) return;
+  clearElement(panel);
+
+  const { term, from_paper, simple_explanation, chunks_used, found_in_paper } = data;
+
+  const badge = document.createElement("div");
+  badge.style.cssText = `
+    display:inline-flex;align-items:center;gap:6px;
+    padding:4px 12px;border-radius:99px;font-size:11px;font-weight:600;
+    margin-bottom:16px;
+    ${found_in_paper
+      ? "background:var(--green-soft);color:var(--green);border:1px solid var(--green);"
+      : "background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber);"}
+  `;
+  badge.textContent = found_in_paper
+    ? `Found in paper (${chunks_used} relevant section${chunks_used !== 1 ? "s" : ""})`
+    : "Not found in paper — using general knowledge";
+  panel.appendChild(badge);
+
+  const heading = document.createElement("div");
+  heading.style.cssText = `font-size:22px;font-weight:700;color:var(--text);
+    margin-bottom:20px;letter-spacing:-0.3px;`;
+  heading.textContent = term.charAt(0).toUpperCase() + term.slice(1);
+  panel.appendChild(heading);
+
+  function makeCard(icon, title, content, accentColor) {
+    const card = document.createElement("div");
+    card.style.cssText = `
+      background:var(--surface);border:1px solid var(--border);
+      border-radius:var(--radius-lg);padding:18px 20px;
+      margin-bottom:14px;border-left:3px solid ${accentColor};`;
+
+    const cardHeader = document.createElement("div");
+    cardHeader.style.cssText = `display:flex;align-items:center;gap:8px;
+      font-size:12px;font-weight:600;color:var(--text2);
+      text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;`;
+    cardHeader.innerHTML = `<span style="font-size:16px;">${icon}</span>${title}`;
+
+    const cardBody = document.createElement("div");
+    cardBody.style.cssText = "font-size:13.5px;color:var(--text);line-height:1.75;";
+    cardBody.textContent   = content;
+
+    card.appendChild(cardHeader);
+    card.appendChild(cardBody);
+    return card;
+  }
+
+  panel.appendChild(makeCard("📄", "From This Paper",  from_paper,          "var(--accent)"));
+  panel.appendChild(makeCard("💡", "In Simple Words",  simple_explanation,  "var(--green)"));
+
+  const hint = document.createElement("div");
+  hint.style.cssText  = "text-align:center;font-size:11.5px;color:var(--text3);margin-top:8px;padding:10px;";
+  hint.textContent    = "Try another term above";
+  panel.appendChild(hint);
+}
+
+function handleExplainKey(event) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    void explainTerm();
+  }
+}
+
+/* ── Summary coming soon ──────────────────────────────────────────────────── */
 
 function renderSummaryComingSoon() {
   const panel = document.getElementById("summaryAccordion");
@@ -420,12 +518,12 @@ function renderSummaryComingSoon() {
   panel.appendChild(makeComingSoonBox(
     "📝",
     "Summary — Coming Soon",
-    "The AI-powered paper summary feature is currently under development.<br>It will automatically generate a concise summary of any uploaded research paper.",
+    "The AI-powered paper summary feature is currently under development. It will automatically generate a concise summary of any uploaded research paper.",
     "In Development"
   ));
 }
 
-/* ── COMPARISON coming soon ───────────────────────────────────────────────── */
+/* ── Comparison coming soon ───────────────────────────────────────────────── */
 
 function renderComparisonComingSoon() {
   const panel = document.getElementById("comparisonContent");
@@ -434,7 +532,7 @@ function renderComparisonComingSoon() {
   panel.appendChild(makeComingSoonBox(
     "⚖️",
     "Comparison — Coming Soon",
-    "The multi-paper comparison feature is currently under development.<br>It will let you compare difficulty scores and insights across multiple papers side by side.",
+    "The multi-paper comparison feature is currently under development. It will let you compare difficulty scores and insights across multiple papers side by side.",
     "In Development"
   ));
 }
@@ -442,8 +540,7 @@ function renderComparisonComingSoon() {
 /* ── Tab switching ────────────────────────────────────────────────────────── */
 
 function switchTab(name) {
-  const validTabs = ["chat", "summary", "insights", "prerequisites", "comparison", "explain"];
-
+  const validTabs = ["chat", "summary", "insights", "prerequisites", "explain", "comparison"];
 
   validTabs.forEach(tabName => {
     const tabEl   = document.getElementById(`tab-${tabName}`);
@@ -474,9 +571,9 @@ function switchTab(name) {
       body: JSON.stringify({ paper_path: getPaperPath(paper) }),
     })
       .then(data => {
-        const analysis   = data.analysis  || {};
-        const paperInfo  = data.paper     || paper;
-        const updated    = { ...paper, ...paperInfo, analysis, status: "ready" };
+        const analysis  = data.analysis || {};
+        const paperInfo = data.paper    || paper;
+        const updated   = { ...paper, ...paperInfo, analysis, status: "ready" };
         setPaperState(updated);
         renderPapers();
         updatePdfHeader(updated);
@@ -507,7 +604,7 @@ function switchTab(name) {
     if (panel) {
       clearElement(panel);
       panel.appendChild(makeComingSoonBox("⏳", "Extracting Prerequisites...",
-        "Gemini is analyzing the paper and building a learning roadmap. This may take 10–20 seconds."));
+        "Gemini is analyzing the paper and building a learning roadmap. This may take 10-20 seconds."));
     }
 
     fetchJson("/api/prerequisites", {
@@ -554,7 +651,6 @@ async function loadPapers() {
 async function selectPaper(paperId) {
   setActivePaper(paperId);
 
-  // If a content tab is active, refresh it for the new paper
   const activeTab = document.querySelector(".tab.active");
   if (activeTab) {
     const name = activeTab.id.replace("tab-", "");
@@ -584,7 +680,7 @@ async function handleFiles(files) {
       const analysis = data.analysis || {};
       const newPaper = { ...paper, analysis, status: "ready", active: true };
 
-      state.papers = [newPaper, ...state.papers.map(p => ({ ...p, active: false }))];
+      state.papers        = [newPaper, ...state.papers.map(p => ({ ...p, active: false }))];
       state.activePaperId = getPaperId(newPaper);
       localStorage.setItem(STORAGE_KEYS.activePaperId, state.activePaperId);
 
@@ -613,23 +709,23 @@ async function sendMessage() {
   if (!message) return;
   if (!paper) { showToast("Upload or select a paper first"); return; }
 
-  const userMsg = document.createElement("div");
+  const userMsg  = document.createElement("div");
   userMsg.className = "msg user";
-  const body   = document.createElement("div");  body.className = "msg-body";
-  const bubble = document.createElement("div");  bubble.className = "msg-bubble";
+  const body     = document.createElement("div"); body.className   = "msg-body";
+  const bubble   = document.createElement("div"); bubble.className = "msg-bubble";
   bubble.textContent = message;
   body.appendChild(bubble);
-  const avatar = document.createElement("div");  avatar.className = "msg-avatar";
+  const avatar   = document.createElement("div"); avatar.className = "msg-avatar";
   avatar.textContent = "U";
   userMsg.appendChild(body);
   userMsg.appendChild(avatar);
   chatArea.insertBefore(userMsg, thinkEl);
 
-  input.value = "";
-  input.style.height = "auto";
-  thinkEl.style.display = "flex";
-  chatArea.scrollTop = chatArea.scrollHeight;
-  state.thinking = true;
+  input.value            = "";
+  input.style.height     = "auto";
+  thinkEl.style.display  = "flex";
+  chatArea.scrollTop     = chatArea.scrollHeight;
+  state.thinking         = true;
 
   try {
     const data = await fetchJson("/api/chat", {
@@ -638,16 +734,17 @@ async function sendMessage() {
     });
     thinkEl.style.display = "none";
 
-    const aiMsg    = document.createElement("div");   aiMsg.className = "msg assistant";
+    const aiMsg    = document.createElement("div");   aiMsg.className    = "msg assistant";
     const aiAvatar = document.createElement("div");   aiAvatar.className = "msg-avatar";
     aiAvatar.textContent = "PM";
-    const aiBody   = document.createElement("div");   aiBody.className = "msg-body";
+    const aiBody   = document.createElement("div");   aiBody.className   = "msg-body";
     const aiBubble = document.createElement("div");   aiBubble.className = "msg-bubble";
     aiBubble.textContent = data.reply || "No response returned.";
 
-    const actions    = document.createElement("div");   actions.className = "msg-actions";
-    const copyButton = document.createElement("button"); copyButton.className = "msg-action-btn";
-    copyButton.type = "button"; copyButton.textContent = "Copy";
+    const actions    = document.createElement("div");     actions.className    = "msg-actions";
+    const copyButton = document.createElement("button");  copyButton.className = "msg-action-btn";
+    copyButton.type        = "button";
+    copyButton.textContent = "Copy";
     copyButton.addEventListener("click", () => copyText(data.reply || ""));
     actions.appendChild(copyButton);
 
@@ -659,10 +756,10 @@ async function sendMessage() {
     chatArea.scrollTop = chatArea.scrollHeight;
   } catch (error) {
     thinkEl.style.display = "none";
-    const aiMsg    = document.createElement("div");   aiMsg.className = "msg assistant";
+    const aiMsg    = document.createElement("div");   aiMsg.className    = "msg assistant";
     const aiAvatar = document.createElement("div");   aiAvatar.className = "msg-avatar";
     aiAvatar.textContent = "PM";
-    const aiBody   = document.createElement("div");   aiBody.className = "msg-body";
+    const aiBody   = document.createElement("div");   aiBody.className   = "msg-body";
     const aiBubble = document.createElement("div");   aiBubble.className = "msg-bubble";
     aiBubble.textContent = error.message || "Error: Could not get response";
     aiBody.appendChild(aiBubble);
@@ -725,7 +822,7 @@ function setupResizeHandle() {
 
   handle.addEventListener("mousedown", e => {
     isResizing = true; startX = e.clientX; startWidth = pdfPanel.offsetWidth;
-    document.body.style.cursor = "col-resize";
+    document.body.style.cursor     = "col-resize";
     document.body.style.userSelect = "none";
   });
   document.addEventListener("mousemove", e => {
@@ -807,153 +904,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
-/* ── EXPLAIN TAB ──────────────────────────────────────────────────────────── */
+/* ── Global function exposure ─────────────────────────────────────────────── */
 
-async function explainTerm() {
-  const input   = document.getElementById("explainInput");
-  const panel   = document.getElementById("explainContent");
-  const paper   = ensureActivePaper();
-
-  if (!input || !panel) return;
-
-  const term = input.value.trim();
-
-  if (!term) {
-    showToast("Please type a term to explain");
-    return;
-  }
-
-  if (!paper) {
-    showToast("Upload or select a paper first");
-    return;
-  }
-
-  // Show loading state
-  clearElement(panel);
-  panel.appendChild(makeComingSoonBox(
-    "🔍",
-    "Looking up term...",
-    `Searching the paper and generating explanation for "${term}". This may take a few seconds.`
-  ));
-
-  try {
-    const data = await fetchJson("/api/explain", {
-      method: "POST",
-      body: JSON.stringify({
-        term:       term,
-        paper_path: getPaperPath(paper),
-      }),
-    });
-
-    renderExplainResult(data);
-
-  } catch (error) {
-    clearElement(panel);
-    panel.appendChild(makeComingSoonBox(
-      "❌",
-      "Explanation Failed",
-      error.message || "Could not explain this term. Check your API key and try again."
-    ));
-  }
-}
-
-function renderExplainResult(data) {
-  const panel = document.getElementById("explainContent");
-  if (!panel) return;
-  clearElement(panel);
-
-  const { term, from_paper, simple_explanation, chunks_used, found_in_paper } = data;
-
-  // ── Status badge ──────────────────────────────────────────────────────────
-  const badge = document.createElement("div");
-  badge.style.cssText = `
-    display:inline-flex;align-items:center;gap:6px;
-    padding:4px 12px;border-radius:99px;font-size:11px;font-weight:600;
-    margin-bottom:16px;
-    ${found_in_paper
-      ? "background:var(--green-soft);color:var(--green);border:1px solid var(--green);"
-      : "background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber);"}
-  `;
-  badge.textContent = found_in_paper
-    ? `Found in paper (${chunks_used} relevant section${chunks_used !== 1 ? "s" : ""})`
-    : "Not found in paper — using general knowledge";
-  panel.appendChild(badge);
-
-  // ── Term heading ──────────────────────────────────────────────────────────
-  const heading = document.createElement("div");
-  heading.style.cssText = `
-    font-size:22px;font-weight:700;color:var(--text);
-    margin-bottom:20px;letter-spacing:-0.3px;
-  `;
-  heading.textContent = term.charAt(0).toUpperCase() + term.slice(1);
-  panel.appendChild(heading);
-
-  // ── Card builder ──────────────────────────────────────────────────────────
-  function makeCard(icon, title, content, accentColor) {
-    const card = document.createElement("div");
-    card.style.cssText = `
-      background:var(--surface);border:1px solid var(--border);
-      border-radius:var(--radius-lg);padding:18px 20px;
-      margin-bottom:14px;border-left:3px solid ${accentColor};
-    `;
-
-    const cardHeader = document.createElement("div");
-    cardHeader.style.cssText = `
-      display:flex;align-items:center;gap:8px;
-      font-size:12px;font-weight:600;color:var(--text2);
-      text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;
-    `;
-    cardHeader.innerHTML = `<span style="font-size:16px;">${icon}</span>${title}`;
-
-    const cardBody = document.createElement("div");
-    cardBody.style.cssText = `
-      font-size:13.5px;color:var(--text);line-height:1.75;
-    `;
-    cardBody.textContent = content;
-
-    card.appendChild(cardHeader);
-    card.appendChild(cardBody);
-    return card;
-  }
-
-  // ── From paper card ───────────────────────────────────────────────────────
-  panel.appendChild(makeCard(
-    "📄",
-    "From This Paper",
-    from_paper,
-    "var(--accent)"
-  ));
-
-  // ── Simple explanation card ───────────────────────────────────────────────
-  panel.appendChild(makeCard(
-    "💡",
-    "In Simple Words",
-    simple_explanation,
-    "var(--green)"
-  ));
-
-  // ── Try another term hint ─────────────────────────────────────────────────
-  const hint = document.createElement("div");
-  hint.style.cssText = `
-    text-align:center;font-size:11.5px;color:var(--text3);
-    margin-top:8px;padding:10px;
-  `;
-  hint.textContent = "Try another term above ↑";
-  panel.appendChild(hint);
-}
-
-function handleExplainKey(event) {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    void explainTerm();
-  }
-}
-
-window.toggleDark  = toggleDark;
-window.switchTab   = switchTab;
-window.handleKey   = handleKey;
-window.sendMessage = sendMessage;
-window.changePage  = changePage;
-// ADD these two lines alongside the existing window.* lines:
-window.explainTerm     = explainTerm;
+window.toggleDark       = toggleDark;
+window.switchTab        = switchTab;
+window.handleKey        = handleKey;
+window.sendMessage      = sendMessage;
+window.changePage       = changePage;
+window.explainTerm      = explainTerm;
 window.handleExplainKey = handleExplainKey;
