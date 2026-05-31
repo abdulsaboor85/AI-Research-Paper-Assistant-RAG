@@ -83,7 +83,8 @@ def collection_name_from_path(pdf_path: Path) -> str:
 def paper_record(pdf_path: Path) -> dict[str, Any]:
 
     stat = pdf_path.stat()
-
+    raw_stem = pdf_path.stem
+    clean_title = re.sub(r"^\d{8}_\d{6}_", "", raw_stem)
     return {
         "id": to_relative_path(pdf_path),
         "title": pdf_path.stem,
@@ -97,6 +98,17 @@ def paper_record(pdf_path: Path) -> dict[str, Any]:
 
 
 def list_papers() -> list[dict[str, Any]]:
+
+    pdf_files = sorted(
+        {
+            path.resolve()
+            for path in UPLOAD_DIR.rglob("*.pdf")
+            if path.is_file()
+        },
+        key=lambda item: item.name.lower(),
+    )
+
+    return [paper_record(path) for path in pdf_files]
 
     pdf_files = sorted(
         {
@@ -299,10 +311,8 @@ def api_upload() -> Any:
 
     try:
 
-        analysis = analyze_paper(
-            saved_path,
-            reindex=True
-        )
+        collection_name = collection_name_from_path(saved_path)
+        index_paper(saved_path, collection_name)
 
     except Exception:
 
@@ -311,13 +321,10 @@ def api_upload() -> Any:
 
         raise
 
-    paper = analysis.pop("paper")
-
     return jsonify({
-        "paper": paper,
-        "analysis": analysis
+        "paper": paper_record(saved_path),
+        "analysis": {}
     })
-
 
 # =========================================================
 # ANALYZE

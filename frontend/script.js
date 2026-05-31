@@ -133,14 +133,7 @@ function renderPapers() {
 
     const meta = document.createElement("div");
     meta.className = "paper-meta";
-    const score = getPaperScore(paper);
-    const label = getPaperLabel(paper);
-    const parts = [];
-    if (score !== null) parts.push(`Score ${formatScore(score)}/10`);
-    if (label) parts.push(label);
-    if (!parts.length) parts.push(paper.status === "ready" ? "Ready" : "Indexing...");
-    meta.textContent = parts.join(" · ");
-
+    meta.textContent = "";  
     info.appendChild(title);
     info.appendChild(meta);
     item.appendChild(dot);
