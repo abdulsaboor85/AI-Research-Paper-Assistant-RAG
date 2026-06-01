@@ -130,7 +130,6 @@ function renderPapers() {
     title.className   = "paper-title";
     title.textContent = getPaperTitle(paper);
 
-    // meta row — empty, no score shown in sidebar
     const meta = document.createElement("div");
     meta.className   = "paper-meta";
     meta.textContent = "";
@@ -149,6 +148,16 @@ function updatePdfHeader(paper) {
   if (!el) return;
   if (!paper) { el.textContent = "Select a paper to view"; return; }
   el.textContent = getPaperTitle(paper);
+}
+
+/* ── LOGOUT ───────────────────────────────────────────────────────────────── */
+
+async function logout() {
+  try {
+    await fetch(apiUrl("/api/logout"), { method: "POST" });
+  } finally {
+    window.location.href = "/auth";
+  }
 }
 
 /* ── INSIGHTS TAB ─────────────────────────────────────────────────────────── */
@@ -913,3 +922,4 @@ window.sendMessage      = sendMessage;
 window.changePage       = changePage;
 window.explainTerm      = explainTerm;
 window.handleExplainKey = handleExplainKey;
+window.logout           = logout;

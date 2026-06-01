@@ -1,14 +1,14 @@
-from __future__ import annotations
 
 import os
 import re
+import secrets
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, redirect, request, send_from_directory, session
 from werkzeug.utils import secure_filename
 
 # =========================================================
@@ -27,15 +27,36 @@ load_dotenv(BASE_DIR / ".env")
 PIPELINE_DIR = BASE_DIR / "pipeline"
 sys.path.insert(0, str(PIPELINE_DIR))
 
+from auth_routes import auth_bp
+
 # =========================================================
 # FLASK
 # =========================================================
 
 app = Flask(__name__)
 
+app.secret_key                        = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+app.register_blueprint(auth_bp)
+
 # =========================================================
 # HELPERS
 # =========================================================
+
+def get_user_upload_dir() -> Path:
+    """
+    Returns the upload folder for the currently logged-in user.
+    Structure: papers/uploads/{user_id}/
+    Creates the folder automatically if it does not exist.
+    Each user only ever sees and writes to their own subfolder.
+    """
+    user_id  = session.get("user_id", "anonymous")
+    user_dir = UPLOAD_DIR / str(user_id)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir
+
 
 def to_relative_path(path: Path) -> str:
     return path.relative_to(BASE_DIR).as_posix()
@@ -85,10 +106,15 @@ def paper_record(pdf_path: Path) -> dict[str, Any]:
 
 
 def list_papers() -> list[dict[str, Any]]:
+    """
+    Lists only the papers uploaded by the currently logged-in user.
+    Each user has their own subfolder: papers/uploads/{user_id}/
+    """
+    user_dir  = get_user_upload_dir()
     pdf_files = sorted(
         {
             path.resolve()
-            for path in UPLOAD_DIR.rglob("*.pdf")
+            for path in user_dir.rglob("*.pdf")
             if path.is_file()
         },
         key=lambda item: item.name.lower(),
@@ -101,8 +127,8 @@ def list_papers() -> list[dict[str, Any]]:
 # =========================================================
 
 def index_paper(pdf_path: Path, collection_name: str) -> None:
-    from chunker  import chunk_text
-    from embedder import embed_and_store
+    from chunker   import chunk_text
+    from embedder  import embed_and_store
     from extractor import extract_text
 
     full_text = extract_text(str(pdf_path))
@@ -141,7 +167,7 @@ def analyze_paper(pdf_path: Path, reindex: bool = True) -> dict[str, Any]:
 
     result = analyze_difficulty(full_text=full_text, api_key=api_key)
 
-    result["paper"] = paper_record(pdf_path)
+    result["paper"]                   = paper_record(pdf_path)
     result["paper"]["collectionName"] = collection_name
 
     return result
@@ -178,6 +204,8 @@ def resolve_collection_name(data: dict[str, Any]) -> str:
 
 @app.get("/")
 def index() -> Any:
+    if "user_id" not in session:
+        return redirect("/auth")
     return send_from_directory(FRONTEND_DIR, "index.html")
 
 
@@ -207,6 +235,8 @@ def uploads(filename: str) -> Any:
 
 @app.get("/api/papers")
 def api_papers() -> Any:
+    if "user_id" not in session:
+        return jsonify({"error": "Not logged in."}), 401
     return jsonify({"papers": list_papers()})
 
 
@@ -216,6 +246,9 @@ def api_papers() -> Any:
 
 @app.post("/api/upload")
 def api_upload() -> Any:
+    if "user_id" not in session:
+        return jsonify({"error": "Not logged in."}), 401
+
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded."}), 400
 
@@ -230,8 +263,9 @@ def api_upload() -> Any:
     filename   = secure_filename(uploaded.filename)
     stamp      = datetime.now().strftime("%Y%m%d_%H%M%S")
     saved_name = f"{stamp}_{filename}"
-    saved_path = UPLOAD_DIR / saved_name
 
+    # Save into the current user's own subfolder
+    saved_path = get_user_upload_dir() / saved_name
     uploaded.save(saved_path)
 
     try:
@@ -249,11 +283,14 @@ def api_upload() -> Any:
 
 
 # =========================================================
-# API — ANALYZE (difficulty score)
+# API — ANALYZE
 # =========================================================
 
 @app.post("/api/analyze")
 def api_analyze() -> Any:
+    if "user_id" not in session:
+        return jsonify({"error": "Not logged in."}), 401
+
     data = request.get_json(silent=True) or {}
 
     raw_path = (
@@ -282,6 +319,9 @@ def api_analyze() -> Any:
 
 @app.post("/api/chat")
 def api_chat() -> Any:
+    if "user_id" not in session:
+        return jsonify({"error": "Not logged in."}), 401
+
     from qa_engine import answer_question
     from retriever import retrieve_relevant_chunks
 
@@ -317,6 +357,9 @@ def api_chat() -> Any:
 
 @app.post("/api/prerequisites")
 def api_prerequisites() -> Any:
+    if "user_id" not in session:
+        return jsonify({"error": "Not logged in."}), 401
+
     try:
         from prerequisite_extractor import PrerequisiteExtractor, extract_pdf_text
 
@@ -357,6 +400,9 @@ def api_prerequisites() -> Any:
 
 @app.post("/api/explain")
 def api_explain() -> Any:
+    if "user_id" not in session:
+        return jsonify({"error": "Not logged in."}), 401
+
     try:
         from term_explainer import explain_term
         from retriever      import retrieve_relevant_chunks
@@ -376,15 +422,24 @@ def api_explain() -> Any:
         if not raw_path:
             return jsonify({"error": "paper_path is required."}), 400
 
-        pdf_path  = normalize_pdf_path(str(raw_path))
-        api_key   = os.getenv("GEMINI_API_KEY")
+        pdf_path = normalize_pdf_path(str(raw_path))
+        api_key  = os.getenv("GEMINI_API_KEY")
 
         if not api_key:
             return jsonify({"error": "GEMINI_API_KEY missing in .env"}), 500
 
         collection_name = collection_name_from_path(pdf_path)
-        chunks          = retrieve_relevant_chunks(term, collection_name=collection_name, top_k=5)
-        result          = explain_term(term=term, chunks=chunks, api_key=api_key, paper_title=pdf_path.stem)
+        chunks          = retrieve_relevant_chunks(
+            term,
+            collection_name=collection_name,
+            top_k=5,
+        )
+        result = explain_term(
+            term=term,
+            chunks=chunks,
+            api_key=api_key,
+            paper_title=pdf_path.stem,
+        )
 
         return jsonify(result)
 

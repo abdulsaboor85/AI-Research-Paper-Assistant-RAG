@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PaperMind — Sign In</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="./auth.css"/>
+</head>
+<body>
+
+  <!-- Dark mode toggle -->
+  <button class="auth-dark-btn" id="authDarkBtn" onclick="toggleAuthDark()">🌙</button>
+
+  <div class="auth-page">
+
+    <!-- ── LEFT: Brand panel ── -->
+    <div class="brand-panel">
+      <div class="brand-content">
+
+        <div class="logo-row">
+          <div class="logo-mark">
+            <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+              <path d="M2 4 L2 12 Q2 14 4 14 L12 14 M4 2 L12 2 Q14 2 14 4 L14 10"/>
+            </svg>
+          </div>
+          <span class="logo-text">PaperMind</span>
+        </div>
+
+        <h1 class="brand-headline">
+          Understand any<br/><em>research paper</em>
+        </h1>
+
+        <p class="brand-sub">
+          Difficulty scoring, prerequisite roadmaps, RAG-powered Q&amp;A, and term explanations — all from a single upload.
+        </p>
+
+        <div class="feature-list">
+          <div class="feature-item">
+            <span class="feature-dot"></span>
+            Difficulty Score with LLM perception
+          </div>
+          <div class="feature-item">
+            <span class="feature-dot"></span>
+            14-topic learning roadmap
+          </div>
+          <div class="feature-item">
+            <span class="feature-dot"></span>
+            Grounded Q&amp;A — no hallucinations
+          </div>
+          <div class="feature-item">
+            <span class="feature-dot"></span>
+            Two-layer term explainer
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── RIGHT: Form panel ── -->
+    <div class="form-panel">
+      <div class="form-card">
+
+        <!-- Tab switcher -->
+        <div class="tab-switcher">
+          <button class="tab-btn active" id="loginTab" onclick="switchMode('login')">Sign In</button>
+          <button class="tab-btn"        id="signupTab" onclick="switchMode('signup')">Create Account</button>
+        </div>
+
+        <!-- LOGIN FORM -->
+        <div id="loginForm">
+          <p class="form-subtitle">Welcome back — sign in to continue.</p>
+
+          <div class="field-group">
+            <label class="field-label" for="loginUser">Username or Email</label>
+            <input
+              class="field-input"
+              id="loginUser"
+              type="text"
+              placeholder="your_username or email@example.com"
+              autocomplete="username"
+            />
+          </div>
+
+          <div class="field-group">
+            <label class="field-label" for="loginPass">Password</label>
+            <div class="input-wrap">
+              <input
+                class="field-input"
+                id="loginPass"
+                type="password"
+                placeholder="Your password"
+                autocomplete="current-password"
+                onkeydown="handleKey(event, 'login')"
+              />
+              <button class="eye-btn" type="button" onclick="togglePass('loginPass', this)" aria-label="Toggle password visibility">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
+                  <path d="M1 10s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6z"/>
+                  <circle cx="10" cy="10" r="2.5"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="error-msg" id="loginError"></div>
+
+          <button class="submit-btn" id="loginBtn" onclick="doLogin()">
+            <span id="loginBtnText">Sign In</span>
+            <span class="spinner" id="loginSpinner"></span>
+          </button>
+
+          <p class="switch-hint">
+            No account? <a href="#" onclick="switchMode('signup'); return false;">Create one free</a>
+          </p>
+        </div>
+
+        <!-- SIGNUP FORM -->
+        <div id="signupForm" style="display:none">
+          <p class="form-subtitle">Create your free account — takes 10 seconds.</p>
+
+          <div class="field-group">
+            <label class="field-label" for="signupUser">Username</label>
+            <input
+              class="field-input"
+              id="signupUser"
+              type="text"
+              placeholder="e.g. alex_researcher"
+              autocomplete="username"
+            />
+            <span class="field-hint">At least 3 characters.</span>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label" for="signupEmail">Email</label>
+            <input
+              class="field-input"
+              id="signupEmail"
+              type="email"
+              placeholder="you@example.com"
+              autocomplete="email"
+            />
+          </div>
+
+          <div class="field-group">
+            <label class="field-label" for="signupPass">Password</label>
+            <div class="input-wrap">
+              <input
+                class="field-input"
+                id="signupPass"
+                type="password"
+                placeholder="At least 6 characters"
+                autocomplete="new-password"
+                onkeydown="handleKey(event, 'signup')"
+              />
+              <button class="eye-btn" type="button" onclick="togglePass('signupPass', this)" aria-label="Toggle password visibility">
+                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6">
+                  <path d="M1 10s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6z"/>
+                  <circle cx="10" cy="10" r="2.5"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="error-msg" id="signupError"></div>
+
+          <button class="submit-btn" id="signupBtn" onclick="doSignup()">
+            <span id="signupBtnText">Create Account</span>
+            <span class="spinner" id="signupSpinner"></span>
+          </button>
+
+          <p class="switch-hint">
+            Already have an account? <a href="#" onclick="switchMode('login'); return false;">Sign in</a>
+          </p>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <script src="./auth.js"></script>
+</body>
+</html>
