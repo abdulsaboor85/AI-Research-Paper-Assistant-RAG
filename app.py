@@ -1,8 +1,8 @@
-
 import os
 import re
 import secrets
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,16 +42,67 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.register_blueprint(auth_bp)
 
 # =========================================================
+# IN-MEMORY CACHES  (keyed by collection_name)
+# =========================================================
+
+# indexing progress: collection_name -> {status, step, pct, message}
+_index_status: dict[str, dict] = {}
+_index_lock = threading.Lock()
+
+# analysis cache: collection_name -> result dict
+_analysis_cache: dict[str, dict] = {}
+_analysis_lock = threading.Lock()
+
+# prerequisites cache: collection_name -> str
+_prereq_cache: dict[str, str] = {}
+_prereq_lock = threading.Lock()
+
+
+# ── index status helpers ─────────────────────────────────
+
+def _default_status() -> dict:
+    return {"status": "ready", "step": "", "pct": 100, "message": ""}
+
+def set_index_status(collection_name: str, status: str, step: str = "",
+                     pct: int = 0, message: str = "") -> None:
+    with _index_lock:
+        _index_status[collection_name] = {
+            "status":  status,
+            "step":    step,
+            "pct":     pct,
+            "message": message,
+        }
+
+def get_index_status(collection_name: str) -> dict:
+    with _index_lock:
+        return _index_status.get(collection_name, _default_status())
+
+# ── analysis cache helpers ───────────────────────────────
+
+def get_cached_analysis(collection_name: str) -> dict | None:
+    with _analysis_lock:
+        return _analysis_cache.get(collection_name)
+
+def set_cached_analysis(collection_name: str, result: dict) -> None:
+    with _analysis_lock:
+        _analysis_cache[collection_name] = result
+
+# ── prerequisites cache helpers ──────────────────────────
+
+def get_cached_prereqs(collection_name: str) -> str | None:
+    with _prereq_lock:
+        return _prereq_cache.get(collection_name)
+
+def set_cached_prereqs(collection_name: str, result: str) -> None:
+    with _prereq_lock:
+        _prereq_cache[collection_name] = result
+
+
+# =========================================================
 # HELPERS
 # =========================================================
 
 def get_user_upload_dir() -> Path:
-    """
-    Returns the upload folder for the currently logged-in user.
-    Structure: papers/uploads/{user_id}/
-    Creates the folder automatically if it does not exist.
-    Each user only ever sees and writes to their own subfolder.
-    """
     user_id  = session.get("user_id", "anonymous")
     user_dir = UPLOAD_DIR / str(user_id)
     user_dir.mkdir(parents=True, exist_ok=True)
@@ -64,23 +115,18 @@ def to_relative_path(path: Path) -> str:
 
 def normalize_pdf_path(raw_path: str) -> Path:
     candidate = Path(raw_path.strip())
-
     if not candidate.is_absolute():
         candidate = (BASE_DIR / candidate).resolve()
     else:
         candidate = candidate.resolve()
-
     try:
         candidate.relative_to(BASE_DIR)
     except ValueError as exc:
         raise ValueError("Path must stay inside the project directory.") from exc
-
     if candidate.suffix.lower() != ".pdf":
         raise ValueError("File must be a PDF.")
-
     if not candidate.exists():
         raise FileNotFoundError(f"PDF not found: {raw_path}")
-
     return candidate
 
 
@@ -94,30 +140,28 @@ def paper_record(pdf_path: Path) -> dict[str, Any]:
     stat        = pdf_path.stat()
     raw_stem    = pdf_path.stem
     clean_title = re.sub(r"^\d{8}_\d{6}_", "", raw_stem)
+    cname       = collection_name_from_path(pdf_path)
+    idx         = get_index_status(cname)
 
     return {
         "id":             to_relative_path(pdf_path),
         "title":          clean_title,
         "filename":       clean_title,
         "path":           to_relative_path(pdf_path),
-        "collectionName": collection_name_from_path(pdf_path),
+        "collectionName": cname,
         "modifiedAt":     datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        "indexStatus":    idx["status"],
+        "indexPct":       idx["pct"],
+        "indexStep":      idx["step"],
+        "indexMessage":   idx["message"],
     }
 
 
 def list_papers() -> list[dict[str, Any]]:
-    """
-    Lists only the papers uploaded by the currently logged-in user.
-    Each user has their own subfolder: papers/uploads/{user_id}/
-    """
     user_dir  = get_user_upload_dir()
     pdf_files = sorted(
-        {
-            path.resolve()
-            for path in user_dir.rglob("*.pdf")
-            if path.is_file()
-        },
-        key=lambda item: item.name.lower(),
+        {path.resolve() for path in user_dir.rglob("*.pdf") if path.is_file()},
+        key=lambda p: p.name.lower(),
     )
     return [paper_record(path) for path in pdf_files]
 
@@ -126,29 +170,76 @@ def list_papers() -> list[dict[str, Any]]:
 # INDEXING
 # =========================================================
 
-def index_paper(pdf_path: Path, collection_name: str) -> None:
+def index_paper(pdf_path: Path, collection_name: str, force: bool = False) -> None:
+    """Run extract → chunk → embed. Pass force=True to re-embed even if cached."""
     from chunker   import chunk_text
     from embedder  import embed_and_store
     from extractor import extract_text
 
     full_text = extract_text(str(pdf_path))
-
     if len(full_text.strip()) < 100:
         raise ValueError("Could not extract enough text from PDF.")
 
     chunks = chunk_text(full_text)
-
     if not chunks:
         raise ValueError("Chunking produced no chunks.")
 
-    embed_and_store(chunks, collection_name=collection_name)
+    embed_and_store(chunks, collection_name=collection_name, force=force)
+
+
+def index_paper_background(pdf_path: Path, collection_name: str) -> None:
+    """
+    Background indexing with granular progress updates.
+    Steps: extract (0-20%) → chunk (20-40%) → embed (40-95%) → done (100%)
+    """
+    set_index_status(collection_name, "indexing", "Starting…", 5,
+                     "Preparing to index paper")
+
+    def _run() -> None:
+        try:
+            from chunker   import chunk_text
+            from embedder  import embed_and_store, collection_exists_and_has_data
+            from extractor import extract_text
+
+            # ── Step 1: Extract ──────────────────────────────
+            set_index_status(collection_name, "indexing", "Extracting text", 15,
+                             "Reading PDF text…")
+            full_text = extract_text(str(pdf_path))
+            if len(full_text.strip()) < 100:
+                raise ValueError("Could not extract enough text from PDF.")
+
+            # ── Step 2: Chunk ────────────────────────────────
+            set_index_status(collection_name, "indexing", "Chunking", 35,
+                             "Splitting into chunks…")
+            chunks = chunk_text(full_text)
+            if not chunks:
+                raise ValueError("Chunking produced no chunks.")
+
+            # ── Step 3: Embed (skip if already done) ─────────
+            if collection_exists_and_has_data(collection_name):
+                set_index_status(collection_name, "indexing", "Already indexed", 90,
+                                 "Using cached embeddings…")
+            else:
+                set_index_status(collection_name, "indexing", "Embedding", 55,
+                                 f"Embedding {len(chunks)} chunks…")
+                embed_and_store(chunks, collection_name=collection_name, force=False)
+
+            # ── Done ─────────────────────────────────────────
+            set_index_status(collection_name, "ready", "Done", 100, "Ready")
+            print(f"[indexer] {collection_name} ready.")
+
+        except Exception as exc:
+            set_index_status(collection_name, "error", "Failed", 0, str(exc))
+            print(f"[indexer] {collection_name} failed: {exc}")
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # =========================================================
-# ANALYZE PAPER
+# ANALYZE PAPER  (cached — only runs Gemini once per paper)
 # =========================================================
 
-def analyze_paper(pdf_path: Path, reindex: bool = True) -> dict[str, Any]:
+def analyze_paper(pdf_path: Path) -> dict[str, Any]:
     from difficulty_scorer import analyze_difficulty
     from extractor         import extract_text
 
@@ -157,19 +248,22 @@ def analyze_paper(pdf_path: Path, reindex: bool = True) -> dict[str, Any]:
         raise ValueError("GEMINI_API_KEY missing in .env")
 
     collection_name = collection_name_from_path(pdf_path)
-    full_text       = extract_text(str(pdf_path))
 
+    # Return cached result immediately
+    cached = get_cached_analysis(collection_name)
+    if cached:
+        print(f"[analyze] Returning cached analysis for {collection_name}")
+        return cached
+
+    full_text = extract_text(str(pdf_path))
     if len(full_text.strip()) < 100:
         raise ValueError("Could not extract enough text.")
 
-    if reindex:
-        index_paper(pdf_path, collection_name)
-
     result = analyze_difficulty(full_text=full_text, api_key=api_key)
-
     result["paper"]                   = paper_record(pdf_path)
     result["paper"]["collectionName"] = collection_name
 
+    set_cached_analysis(collection_name, result)
     return result
 
 
@@ -178,23 +272,12 @@ def analyze_paper(pdf_path: Path, reindex: bool = True) -> dict[str, Any]:
 # =========================================================
 
 def resolve_collection_name(data: dict[str, Any]) -> str:
-    paper_path = (
-        data.get("paper_path")
-        or data.get("path")
-        or data.get("paperPath")
-    )
-
+    paper_path = (data.get("paper_path") or data.get("path") or data.get("paperPath"))
     if paper_path:
         return collection_name_from_path(normalize_pdf_path(str(paper_path)))
-
-    active_id = (
-        data.get("paper_id")
-        or data.get("paperId")
-    )
-
+    active_id = (data.get("paper_id") or data.get("paperId"))
     if active_id:
         return collection_name_from_path(normalize_pdf_path(str(active_id)))
-
     raise ValueError("paper_path is required.")
 
 
@@ -208,21 +291,17 @@ def index() -> Any:
         return redirect("/auth")
     return send_from_directory(FRONTEND_DIR, "index.html")
 
-
 @app.get("/style.css")
 def style() -> Any:
     return send_from_directory(FRONTEND_DIR, "style.css")
-
 
 @app.get("/script.js")
 def script() -> Any:
     return send_from_directory(FRONTEND_DIR, "script.js")
 
-
 @app.get("/assets/<path:filename>")
 def assets(filename: str) -> Any:
     return send_from_directory(BASE_DIR / "assets", filename)
-
 
 @app.get("/uploads/<path:filename>")
 def uploads(filename: str) -> Any:
@@ -241,49 +320,59 @@ def api_papers() -> Any:
 
 
 # =========================================================
-# API — UPLOAD
+# API — INDEXING STATUS  (with progress %)
+# =========================================================
+
+@app.get("/api/status/<path:paper_path>")
+def api_status(paper_path: str) -> Any:
+    if "user_id" not in session:
+        return jsonify({"error": "Not logged in."}), 401
+    try:
+        pdf_path        = normalize_pdf_path(paper_path)
+        collection_name = collection_name_from_path(pdf_path)
+        info            = get_index_status(collection_name)
+        return jsonify({
+            "status":      info["status"],
+            "step":        info["step"],
+            "pct":         info["pct"],
+            "message":     info["message"],
+            "collectionName": collection_name,
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+# =========================================================
+# API — UPLOAD  (instant response, background index)
 # =========================================================
 
 @app.post("/api/upload")
 def api_upload() -> Any:
     if "user_id" not in session:
         return jsonify({"error": "Not logged in."}), 401
-
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded."}), 400
 
     uploaded = request.files["file"]
-
     if not uploaded.filename:
         return jsonify({"error": "Empty filename."}), 400
-
     if not uploaded.filename.lower().endswith(".pdf"):
         return jsonify({"error": "Only PDF files allowed."}), 400
 
     filename   = secure_filename(uploaded.filename)
     stamp      = datetime.now().strftime("%Y%m%d_%H%M%S")
     saved_name = f"{stamp}_{filename}"
-
-    # Save into the current user's own subfolder
     saved_path = get_user_upload_dir() / saved_name
     uploaded.save(saved_path)
 
-    try:
-        collection_name = collection_name_from_path(saved_path)
-        index_paper(saved_path, collection_name)
-    except Exception:
-        if saved_path.exists():
-            saved_path.unlink()
-        raise
+    collection_name = collection_name_from_path(saved_path)
+    index_paper_background(saved_path, collection_name)
 
-    return jsonify({
-        "paper":    paper_record(saved_path),
-        "analysis": {},
-    })
+    return jsonify({"paper": paper_record(saved_path), "analysis": {}})
 
 
 # =========================================================
-# API — ANALYZE
+# API — ANALYZE  (cached after first run)
 # =========================================================
 
 @app.post("/api/analyze")
@@ -292,23 +381,16 @@ def api_analyze() -> Any:
         return jsonify({"error": "Not logged in."}), 401
 
     data = request.get_json(silent=True) or {}
-
-    raw_path = (
-        data.get("paper_path")
-        or data.get("path")
-        or data.get("paperId")
-    )
-
+    raw_path = (data.get("paper_path") or data.get("path") or data.get("paperId"))
     if not raw_path:
         return jsonify({"error": "paper_path is required."}), 400
 
     try:
         pdf_path = normalize_pdf_path(str(raw_path))
-        analysis = analyze_paper(pdf_path, reindex=True)
-        paper    = analysis.pop("paper")
-
-        return jsonify({"paper": paper, "analysis": analysis})
-
+        result   = analyze_paper(pdf_path)
+        paper    = result.pop("paper") if "paper" in result else paper_record(pdf_path)
+        # Re-attach paper info without mutating the cache entry
+        return jsonify({"paper": paper, "analysis": result})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
 
@@ -326,33 +408,27 @@ def api_chat() -> Any:
     from retriever import retrieve_relevant_chunks
 
     data = request.get_json(silent=True) or {}
-
-    question = (
-        data.get("message")
-        or data.get("question")
-        or ""
-    ).strip()
-
+    question = (data.get("message") or data.get("question") or "").strip()
     if not question:
         return jsonify({"error": "message is required."}), 400
 
     try:
         collection_name = resolve_collection_name(data)
-        chunks          = retrieve_relevant_chunks(question, collection_name=collection_name)
-        reply           = answer_question(question, chunks)
+        info = get_index_status(collection_name)
+        if info["status"] == "indexing":
+            return jsonify({"error": "Paper is still being indexed. Please wait a moment."}), 409
+        if info["status"] == "error":
+            return jsonify({"error": "Indexing failed. Try re-uploading."}), 500
 
-        return jsonify({
-            "reply":          reply,
-            "collectionName": collection_name,
-            "chunksUsed":     len(chunks),
-        })
-
+        chunks = retrieve_relevant_chunks(question, collection_name=collection_name)
+        reply  = answer_question(question, chunks)
+        return jsonify({"reply": reply, "collectionName": collection_name, "chunksUsed": len(chunks)})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
 
 
 # =========================================================
-# API — PREREQUISITES
+# API — PREREQUISITES  (cached after first run)
 # =========================================================
 
 @app.post("/api/prerequisites")
@@ -364,29 +440,28 @@ def api_prerequisites() -> Any:
         from prerequisite_extractor import PrerequisiteExtractor, extract_pdf_text
 
         data = request.get_json(silent=True) or {}
-
-        raw_path = (
-            data.get("paper_path")
-            or data.get("path")
-            or data.get("paperId")
-        )
-
+        raw_path = (data.get("paper_path") or data.get("path") or data.get("paperId"))
         if not raw_path:
             return jsonify({"error": "paper_path is required."}), 400
 
-        pdf_path = normalize_pdf_path(str(raw_path))
-        text     = extract_pdf_text(str(pdf_path))
+        pdf_path        = normalize_pdf_path(str(raw_path))
+        collection_name = collection_name_from_path(pdf_path)
 
+        # Return cached result immediately
+        cached = get_cached_prereqs(collection_name)
+        if cached is not None:
+            print(f"[prereqs] Returning cached prerequisites for {collection_name}")
+            return jsonify({"prerequisites": cached, "paper_path": str(raw_path), "cached": True})
+
+        text = extract_pdf_text(str(pdf_path))
         if len(text.strip()) < 100:
             return jsonify({"error": "Could not extract enough text."}), 400
 
         extractor = PrerequisiteExtractor()
         result    = extractor.extract(text)
 
-        return jsonify({
-            "prerequisites": result,
-            "paper_path":    str(raw_path),
-        })
+        set_cached_prereqs(collection_name, result)
+        return jsonify({"prerequisites": result, "paper_path": str(raw_path), "cached": False})
 
     except Exception as exc:
         import traceback
@@ -409,38 +484,21 @@ def api_explain() -> Any:
 
         data = request.get_json(silent=True) or {}
         term = (data.get("term") or "").strip()
-
         if not term:
             return jsonify({"error": "term is required."}), 400
 
-        raw_path = (
-            data.get("paper_path")
-            or data.get("path")
-            or data.get("paperId")
-        )
-
+        raw_path = (data.get("paper_path") or data.get("path") or data.get("paperId"))
         if not raw_path:
             return jsonify({"error": "paper_path is required."}), 400
 
         pdf_path = normalize_pdf_path(str(raw_path))
         api_key  = os.getenv("GEMINI_API_KEY")
-
         if not api_key:
             return jsonify({"error": "GEMINI_API_KEY missing in .env"}), 500
 
         collection_name = collection_name_from_path(pdf_path)
-        chunks          = retrieve_relevant_chunks(
-            term,
-            collection_name=collection_name,
-            top_k=5,
-        )
-        result = explain_term(
-            term=term,
-            chunks=chunks,
-            api_key=api_key,
-            paper_title=pdf_path.stem,
-        )
-
+        chunks  = retrieve_relevant_chunks(term, collection_name=collection_name, top_k=5)
+        result  = explain_term(term=term, chunks=chunks, api_key=api_key, paper_title=pdf_path.stem)
         return jsonify(result)
 
     except Exception as exc:
@@ -464,12 +522,5 @@ def hello() -> Any:
 
 if __name__ == "__main__":
     print("\nFlask server starting...")
-    print("http://127.0.0.1:5000")
-    print("Test route: http://127.0.0.1:5000/hello\n")
-
-    app.run(
-        host="127.0.0.1",
-        port=5000,
-        debug=True,
-        use_reloader=True,
-    )
+    print("http://127.0.0.1:5000\n")
+    app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=True)

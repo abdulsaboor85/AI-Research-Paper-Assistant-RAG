@@ -1,9 +1,8 @@
 /* ==========================================================================
    PaperMind — Flask-backed frontend
-   Tabs: Chat | Summary | Insights | Prerequisites | Explain | Comparison
    ========================================================================== */
 
-const API_BASE    = "http://127.0.0.1:5000";
+const API_BASE = "http://127.0.0.1:5000";
 const STORAGE_KEYS = {
   darkMode:      "papermind_darkMode",
   pdfPanelWidth: "papermind_pdfPanelWidth",
@@ -17,7 +16,10 @@ const state = {
   totalPages:     0,
   papers:         [],
   activePaperId:  null,
-  loadingPaperId: null,
+  // per-paper tab cache: paperId -> { analysis, prerequisites }
+  _tabCache:      {},
+  // polling timers: collectionName -> intervalId
+  _pollingTimers: {},
 };
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
@@ -32,27 +34,20 @@ async function fetchJson(path, options = {}) {
   const text = await response.text();
   let data = {};
   if (text) { try { data = JSON.parse(text); } catch { data = { raw: text }; } }
-  if (!response.ok) {
-    throw new Error(data.error || data.message || `Request failed: ${response.status}`);
-  }
+  if (!response.ok) throw new Error(data.error || data.message || `Request failed: ${response.status}`);
   return data;
 }
 
 function getPaperId(p)    { return p.id || p.path || p.paperId || p.filename || p.title; }
-function getPaperTitle(p) { return p.title || p.filename || p.path || "Untitled paper"; }
+function getPaperTitle(p) { return p.title || p.filename || p.path || "Untitled"; }
 function getPaperPath(p)  { return p?.path || p?.id || p?.paperId || ""; }
 
 function formatScore(score) {
   if (typeof score !== "number" || Number.isNaN(score)) return null;
   return score.toFixed(1);
 }
-function getPaperScore(p) {
-  const s = p?.analysis?.final_score ?? p?.final_score ?? p?.score;
-  return typeof s === "number" ? s : null;
-}
-function getPaperLabel(p) {
-  return p?.analysis?.difficulty_label || p?.difficulty_label || "";
-}
+function getPaperScore(p)  { const s = p?.analysis?.final_score ?? p?.final_score ?? p?.score; return typeof s === "number" ? s : null; }
+function getPaperLabel(p)  { return p?.analysis?.difficulty_label || p?.difficulty_label || ""; }
 
 function setPaperState(updated) {
   const id = getPaperId(updated);
@@ -79,7 +74,7 @@ function showToast(message) {
   const container = document.getElementById("toastContainer");
   if (!container) return;
   const el = document.createElement("div");
-  el.className   = "toast";
+  el.className = "toast";
   el.textContent = message;
   container.appendChild(el);
   setTimeout(() => el.remove(), 3200);
@@ -87,7 +82,51 @@ function showToast(message) {
 
 function clearElement(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
-/* ── Coming-soon box builder ──────────────────────────────────────────────── */
+/* ── Tab cache helpers ────────────────────────────────────────────────────── */
+
+function getCachedTab(paperId, tabName) {
+  return state._tabCache[paperId]?.[tabName] ?? null;
+}
+
+function setCachedTab(paperId, tabName, data) {
+  if (!state._tabCache[paperId]) state._tabCache[paperId] = {};
+  state._tabCache[paperId][tabName] = data;
+}
+
+function clearCacheForPaper(paperId) {
+  delete state._tabCache[paperId];
+}
+
+/* ── Progress bar ─────────────────────────────────────────────────────────── */
+
+function showProgressBar(pct, message) {
+  let bar = document.getElementById("indexProgressBar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "indexProgressBar";
+    bar.className = "index-progress-bar";
+    bar.innerHTML = `
+      <div class="ipb-track">
+        <div class="ipb-fill" id="ipbFill"></div>
+      </div>
+      <div class="ipb-label" id="ipbLabel"></div>`;
+    // Insert just above the paper list
+    const list = document.getElementById("paperList");
+    if (list && list.parentNode) list.parentNode.insertBefore(bar, list);
+  }
+  bar.style.display = "block";
+  const fill = document.getElementById("ipbFill");
+  const label = document.getElementById("ipbLabel");
+  if (fill) fill.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+  if (label) label.textContent = message || "";
+}
+
+function hideProgressBar() {
+  const bar = document.getElementById("indexProgressBar");
+  if (bar) bar.style.display = "none";
+}
+
+/* ── Coming-soon box ──────────────────────────────────────────────────────── */
 
 function makeComingSoonBox(icon, title, text, badge) {
   const box = document.createElement("div");
@@ -100,7 +139,50 @@ function makeComingSoonBox(icon, title, text, badge) {
   return box;
 }
 
-/* ── Sidebar paper list ───────────────────────────────────────────────────── */
+/* ── Indexing status polling ──────────────────────────────────────────────── */
+
+function startIndexPolling(paper) {
+  const paperId        = getPaperId(paper);
+  const collectionName = paper.collectionName;
+  if (state._pollingTimers[collectionName]) return;
+
+  const timer = setInterval(async () => {
+    try {
+      const res = await fetch(apiUrl(`/api/status/${getPaperPath(paper)}`));
+      if (!res.ok) return;
+      const data = await res.json();
+      const { status, pct, step, message } = data;
+
+      // Update paper in state
+      state.papers = state.papers.map(p =>
+        getPaperId(p) !== paperId ? p
+          : { ...p, indexStatus: status, indexPct: pct, indexStep: step, indexMessage: message }
+      );
+      renderPapers();
+
+      // Show progress bar only for the active paper
+      if (state.activePaperId === paperId && status === "indexing") {
+        showProgressBar(pct, message || step);
+      }
+
+      if (status === "ready") {
+        clearInterval(timer);
+        delete state._pollingTimers[collectionName];
+        hideProgressBar();
+        showToast(`"${getPaperTitle(paper)}" is ready!`);
+      } else if (status === "error") {
+        clearInterval(timer);
+        delete state._pollingTimers[collectionName];
+        hideProgressBar();
+        showToast(`Indexing failed for "${getPaperTitle(paper)}". Try re-uploading.`);
+      }
+    } catch { /* network blip — keep polling */ }
+  }, 2000);
+
+  state._pollingTimers[collectionName] = timer;
+}
+
+/* ── Sidebar ──────────────────────────────────────────────────────────────── */
 
 function renderPapers() {
   const list = document.getElementById("paperList");
@@ -110,29 +192,47 @@ function renderPapers() {
   if (!state.papers.length) {
     const empty = document.createElement("div");
     empty.style.cssText = "padding:16px;text-align:center;color:var(--text3);font-size:12px;";
-    empty.textContent   = "No papers yet — upload one to get started";
+    empty.textContent = "No papers yet — upload one to get started";
     list.appendChild(empty);
     return;
   }
 
   state.papers.forEach(paper => {
-    const paperId = getPaperId(paper);
-    const item    = document.createElement("div");
+    const paperId   = getPaperId(paper);
+    const idxStatus = paper.indexStatus || "ready";
+    const pct       = paper.indexPct ?? 100;
+
+    const item = document.createElement("div");
     item.className = `paper-item${paper.active ? " active" : ""}`;
 
     const dot = document.createElement("div");
-    dot.className = `paper-dot ${paper.status === "ready" ? "ready" : "indexing"}`;
+    dot.className = idxStatus === "indexing" ? "paper-dot indexing"
+                  : idxStatus === "error"    ? "paper-dot error"
+                  : "paper-dot ready";
 
-    const info  = document.createElement("div");
+    const info = document.createElement("div");
     info.className = "paper-info";
 
     const title = document.createElement("div");
-    title.className   = "paper-title";
+    title.className = "paper-title";
     title.textContent = getPaperTitle(paper);
 
     const meta = document.createElement("div");
-    meta.className   = "paper-meta";
-    meta.textContent = "";
+    meta.className = "paper-meta";
+
+    if (idxStatus === "indexing") {
+      // Mini progress bar inside sidebar item
+      meta.innerHTML = `
+        <span style="color:var(--amber);">${paper.indexStep || "Indexing…"}</span>
+        <div class="sidebar-mini-bar">
+          <div class="sidebar-mini-fill" style="width:${pct}%"></div>
+        </div>`;
+    } else if (idxStatus === "error") {
+      meta.textContent = "Index failed";
+      meta.style.color = "var(--red)";
+    } else {
+      meta.textContent = "";
+    }
 
     info.appendChild(title);
     info.appendChild(meta);
@@ -146,16 +246,13 @@ function renderPapers() {
 function updatePdfHeader(paper) {
   const el = document.getElementById("pdfTitle");
   if (!el) return;
-  if (!paper) { el.textContent = "Select a paper to view"; return; }
-  el.textContent = getPaperTitle(paper);
+  el.textContent = paper ? getPaperTitle(paper) : "Select a paper to view";
 }
 
 /* ── LOGOUT ───────────────────────────────────────────────────────────────── */
 
 async function logout() {
-  try {
-    await fetch(apiUrl("/api/logout"), { method: "POST" });
-  } finally {
+  try { await fetch(apiUrl("/api/logout"), { method: "POST" }); } finally {
     window.location.href = "/auth";
   }
 }
@@ -169,58 +266,40 @@ function renderInsights(paper) {
 
   if (!paper) {
     panel.appendChild(makeComingSoonBox("📄", "No Paper Selected",
-      "Upload or select a paper from the sidebar to view its difficulty analysis."));
-    return;
+      "Upload or select a paper to view its difficulty analysis.")); return;
   }
-
   const analysis = paper.analysis;
   if (!analysis) {
-    panel.appendChild(makeComingSoonBox("⏳", "Analyzing...",
-      "Difficulty analysis is being computed. Please wait."));
-    return;
+    panel.appendChild(makeComingSoonBox("⏳", "Analyzing…", "Computing difficulty analysis.")); return;
   }
 
-  const score     = getPaperScore(paper);
-  const label     = getPaperLabel(paper);
-  const scores    = analysis.scores    || {};
-  const breakdown = analysis.breakdown || {};
+  const score  = getPaperScore(paper);
+  const label  = getPaperLabel(paper);
+  const scores = analysis.scores    || {};
+  const brk    = analysis.breakdown || {};
+  const lc = { Easy: "var(--green)", Medium: "var(--amber)", Hard: "var(--red)" };
+  const labelColor = lc[label] || "var(--accent)";
 
-  const labelColors = { Easy: "var(--green)", Medium: "var(--amber)", Hard: "var(--red)" };
-  const labelColor  = labelColors[label] || "var(--accent)";
-
-  function makeBar(value, max = 10) {
-    const pct  = Math.round((value / max) * 100);
-    const wrap = document.createElement("div");
-    wrap.style.cssText = "background:var(--surface2);border-radius:99px;height:6px;width:100%;margin-top:4px;";
-    const fill = document.createElement("div");
-    fill.style.cssText = `height:6px;border-radius:99px;width:${pct}%;background:var(--accent);transition:width 0.4s;`;
-    wrap.appendChild(fill);
-    return wrap;
+  function makeBar(v, max = 10) {
+    const pct = Math.round((v / max) * 100);
+    const w = document.createElement("div");
+    w.style.cssText = "background:var(--surface2);border-radius:99px;height:6px;width:100%;margin-top:4px;";
+    const f = document.createElement("div");
+    f.style.cssText = `height:6px;border-radius:99px;width:${pct}%;background:var(--accent);transition:width 0.4s;`;
+    w.appendChild(f); return w;
   }
 
-  /* hero card */
   const hero = document.createElement("div");
-  hero.style.cssText = `background:var(--surface);border:1px solid var(--border);
-    border-radius:var(--radius-lg);padding:24px;margin-bottom:16px;
-    display:flex;align-items:center;justify-content:space-between;`;
-
-  const heroLeft = document.createElement("div");
-  heroLeft.innerHTML = `
-    <div style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">Difficulty Score</div>
-    <div style="font-size:42px;font-weight:700;color:var(--text);line-height:1;">
-      ${formatScore(score) ?? "N/A"}<span style="font-size:18px;color:var(--text2);"> / 10</span>
-    </div>
-    <div style="margin-top:10px;">
-      <span style="background:${labelColor}20;color:${labelColor};border:1px solid ${labelColor}40;
-        padding:4px 12px;border-radius:99px;font-size:12px;font-weight:600;">${label || "Unknown"}</span>
-    </div>`;
-
-  const pct    = score !== null ? Math.round((score / 10) * 100) : 0;
-  const circ   = 2 * Math.PI * 36;
+  hero.style.cssText = "background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;";
+  const pct = score !== null ? Math.round((score / 10) * 100) : 0;
+  const circ = 2 * Math.PI * 36;
   const offset = circ - (pct / 100) * circ;
-
-  const heroRight = document.createElement("div");
-  heroRight.innerHTML = `
+  hero.innerHTML = `
+    <div>
+      <div style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">Difficulty Score</div>
+      <div style="font-size:42px;font-weight:700;color:var(--text);line-height:1;">${formatScore(score) ?? "N/A"}<span style="font-size:18px;color:var(--text2);"> / 10</span></div>
+      <div style="margin-top:10px;"><span style="background:${labelColor}20;color:${labelColor};border:1px solid ${labelColor}40;padding:4px 12px;border-radius:99px;font-size:12px;font-weight:600;">${label || "Unknown"}</span></div>
+    </div>
     <svg width="90" height="90" viewBox="0 0 90 90">
       <circle cx="45" cy="45" r="36" fill="none" stroke="var(--surface2)" stroke-width="8"/>
       <circle cx="45" cy="45" r="36" fill="none" stroke="var(--accent)" stroke-width="8"
@@ -228,74 +307,53 @@ function renderInsights(paper) {
         stroke-linecap="round" transform="rotate(-90 45 45)" style="transition:stroke-dashoffset 0.6s;"/>
       <text x="45" y="50" text-anchor="middle" font-size="16" font-weight="700" fill="var(--text)">${pct}%</text>
     </svg>`;
-
-  hero.appendChild(heroLeft);
-  hero.appendChild(heroRight);
   panel.appendChild(hero);
 
-  /* component scores */
   const components = [
     { key: "readability",     label: "Readability",     weight: "10%", icon: "📖" },
     { key: "uncommon_words",  label: "Uncommon Words",  weight: "10%", icon: "🔤" },
     { key: "technical_terms", label: "Technical Terms", weight: "10%", icon: "🔬" },
     { key: "llm_perception",  label: "LLM Perception",  weight: "70%", icon: "🤖" },
   ];
-
   const compCard = document.createElement("div");
-  compCard.style.cssText = `background:var(--surface);border:1px solid var(--border);
-    border-radius:var(--radius-lg);padding:18px;margin-bottom:16px;`;
-  const compTitle = document.createElement("div");
-  compTitle.style.cssText = "font-size:13px;font-weight:600;margin-bottom:16px;color:var(--text);";
-  compTitle.textContent   = "Component Scores";
-  compCard.appendChild(compTitle);
-
+  compCard.style.cssText = "background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;margin-bottom:16px;";
+  const ct = document.createElement("div");
+  ct.style.cssText = "font-size:13px;font-weight:600;margin-bottom:16px;color:var(--text);";
+  ct.textContent = "Component Scores";
+  compCard.appendChild(ct);
   components.forEach(({ key, label: lbl, weight, icon }) => {
-    const val        = scores[key];
-    const displayVal = val !== undefined ? Number(val).toFixed(1) : "N/A";
-    const row        = document.createElement("div");
+    const val = scores[key];
+    const dv  = val !== undefined ? Number(val).toFixed(1) : "N/A";
+    const row = document.createElement("div");
     row.style.cssText = "margin-bottom:14px;";
-    row.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
-        <span style="font-size:12px;color:var(--text2);">
-          ${icon} ${lbl} <span style="color:var(--text3);font-size:10px;">(weight ${weight})</span>
-        </span>
-        <span style="font-size:12px;font-weight:600;color:var(--text);">${displayVal} / 10</span>
-      </div>`;
+    row.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;"><span style="font-size:12px;color:var(--text2);">${icon} ${lbl} <span style="color:var(--text3);font-size:10px;">(weight ${weight})</span></span><span style="font-size:12px;font-weight:600;color:var(--text);">${dv} / 10</span></div>`;
     if (val !== undefined) row.appendChild(makeBar(Number(val)));
     compCard.appendChild(row);
   });
   panel.appendChild(compCard);
 
-  /* paper stats */
   const statsCard = document.createElement("div");
-  statsCard.style.cssText = `background:var(--surface);border:1px solid var(--border);
-    border-radius:var(--radius-lg);padding:18px;`;
-  const statsTitle = document.createElement("div");
-  statsTitle.style.cssText = "font-size:13px;font-weight:600;margin-bottom:14px;color:var(--text);";
-  statsTitle.textContent   = "Paper Statistics";
-  statsCard.appendChild(statsTitle);
-
+  statsCard.style.cssText = "background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;";
+  const st = document.createElement("div");
+  st.style.cssText = "font-size:13px;font-weight:600;margin-bottom:14px;color:var(--text);";
+  st.textContent = "Paper Statistics";
+  statsCard.appendChild(st);
   const stats = [
-    ["Total Sentences",      breakdown.total_sentences       ?? "N/A"],
-    ["Total Words",          breakdown.total_words            ?? "N/A"],
-    ["Uncommon Word %",      breakdown.uncommon_word_pct     != null ? `${breakdown.uncommon_word_pct}%` : "N/A"],
-    ["Technical Keyphrases", breakdown.technical_keyphrases  ?? "N/A"],
-    ["Flesch-Kincaid Grade", breakdown.flesch_kincaid_grade  ?? "N/A"],
-    ["Flesch Reading Ease",  breakdown.flesch_reading_ease   ?? "N/A"],
+    ["Total Sentences", brk.total_sentences ?? "N/A"],
+    ["Total Words",     brk.total_words     ?? "N/A"],
+    ["Uncommon Word %", brk.uncommon_word_pct != null ? `${brk.uncommon_word_pct}%` : "N/A"],
+    ["Tech Keyphrases", brk.technical_keyphrases  ?? "N/A"],
+    ["FK Grade",        brk.flesch_kincaid_grade  ?? "N/A"],
+    ["Reading Ease",    brk.flesch_reading_ease   ?? "N/A"],
   ];
-
   const grid = document.createElement("div");
   grid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:10px;";
-
-  stats.forEach(([statLabel, statVal]) => {
+  stats.forEach(([sl, sv]) => {
     const cell = document.createElement("div");
     cell.style.cssText = "background:var(--surface2);border-radius:var(--radius);padding:10px 12px;";
-    cell.innerHTML = `
-      <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px;">${statLabel}</div>
-      <div style="font-size:15px;font-weight:600;color:var(--text);margin-top:2px;">${statVal}</div>`;
+    cell.innerHTML = `<div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px;">${sl}</div><div style="font-size:15px;font-weight:600;color:var(--text);margin-top:2px;">${sv}</div>`;
     grid.appendChild(cell);
   });
-
   statsCard.appendChild(grid);
   panel.appendChild(statsCard);
 }
@@ -308,91 +366,54 @@ function renderPrerequisites(text) {
   clearElement(panel);
 
   if (!text || !text.trim()) {
-    panel.appendChild(makeComingSoonBox("⚠️", "No Prerequisites Found",
-      "The model returned an empty response. Try again."));
-    return;
+    panel.appendChild(makeComingSoonBox("⚠️", "No Prerequisites Found", "The model returned an empty response.")); return;
   }
 
   const banner = document.createElement("div");
-  banner.style.cssText = `background:var(--accent-soft);border:1px solid var(--accent-border);
-    border-radius:var(--radius-lg);padding:14px 18px;margin-bottom:16px;
-    display:flex;align-items:center;gap:10px;`;
-  banner.innerHTML = `
-    <span style="font-size:20px;">🎓</span>
-    <div>
-      <div style="font-size:13px;font-weight:600;color:var(--accent);">Learning Roadmap</div>
-      <div style="font-size:11px;color:var(--text2);margin-top:2px;">
-        Minimum prerequisites to fully understand this paper — fundamental to advanced.
-      </div>
-    </div>`;
+  banner.style.cssText = "background:var(--accent-soft);border:1px solid var(--accent-border);border-radius:var(--radius-lg);padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:10px;";
+  banner.innerHTML = `<span style="font-size:20px;">🎓</span><div><div style="font-size:13px;font-weight:600;color:var(--accent);">Learning Roadmap</div><div style="font-size:11px;color:var(--text2);margin-top:2px;">Minimum prerequisites — fundamental to advanced.</div></div>`;
   panel.appendChild(banner);
 
   const lines = text.trim().split("\n").filter(l => l.trim());
   const items = [];
-
   lines.forEach(line => {
     const m = line.match(/^\s*(\d+)[.)]\s*(.+)/);
     if (!m) return;
-    const content  = m[2].trim();
-    const colonIdx = content.indexOf(":");
-    items.push(colonIdx !== -1
-      ? { number: m[1], concept: content.slice(0, colonIdx).trim(), explanation: content.slice(colonIdx + 1).trim() }
-      : { number: m[1], concept: content, explanation: "" }
-    );
+    const content = m[2].trim();
+    const ci = content.indexOf(":");
+    items.push(ci !== -1
+      ? { number: m[1], concept: content.slice(0, ci).trim(), explanation: content.slice(ci + 1).trim() }
+      : { number: m[1], concept: content, explanation: "" });
   });
 
   if (!items.length) {
     const raw = document.createElement("div");
-    raw.style.cssText = `background:var(--surface);border:1px solid var(--border);
-      border-radius:var(--radius-lg);padding:18px;white-space:pre-wrap;
-      font-size:12.5px;color:var(--text2);line-height:1.8;`;
+    raw.style.cssText = "background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;white-space:pre-wrap;font-size:12.5px;color:var(--text2);line-height:1.8;";
     raw.textContent = text;
-    panel.appendChild(raw);
-    return;
+    panel.appendChild(raw); return;
   }
 
-  items.forEach((item, index) => {
+  items.forEach((item, idx) => {
     const card = document.createElement("div");
-    card.style.cssText = `background:var(--surface);border:1px solid var(--border);
-      border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:10px;
-      display:flex;align-items:flex-start;gap:14px;
-      transition:border-color 0.15s,box-shadow 0.15s;`;
-
-    const progressColor = index < items.length * 0.33
-      ? "var(--green)"
-      : index < items.length * 0.66
-      ? "var(--amber)"
-      : "var(--red)";
-    card.style.borderLeft = `3px solid ${progressColor}`;
-
-    card.addEventListener("mouseenter", () => {
-      card.style.borderColor = "var(--accent-border)";
-      card.style.boxShadow   = "var(--shadow-sm)";
-    });
-    card.addEventListener("mouseleave", () => {
-      card.style.borderColor = "var(--border)";
-      card.style.boxShadow   = "none";
-    });
+    const progressColor = idx < items.length * 0.33 ? "var(--green)" : idx < items.length * 0.66 ? "var(--amber)" : "var(--red)";
+    card.style.cssText = `background:var(--surface);border:1px solid var(--border);border-left:3px solid ${progressColor};border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:10px;display:flex;align-items:flex-start;gap:14px;transition:border-color 0.15s,box-shadow 0.15s;`;
+    card.addEventListener("mouseenter", () => { card.style.borderColor = "var(--accent-border)"; card.style.boxShadow = "var(--shadow-sm)"; });
+    card.addEventListener("mouseleave", () => { card.style.borderColor = "var(--border)"; card.style.boxShadow = "none"; });
 
     const badge = document.createElement("div");
-    badge.style.cssText = `min-width:28px;height:28px;border-radius:50%;
-      background:var(--accent);color:white;
-      display:flex;align-items:center;justify-content:center;
-      font-size:11px;font-weight:700;flex-shrink:0;margin-top:1px;`;
+    badge.style.cssText = "min-width:28px;height:28px;border-radius:50%;background:var(--accent);color:white;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;margin-top:1px;";
     badge.textContent = item.number;
 
     const content = document.createElement("div");
     content.style.cssText = "flex:1;min-width:0;";
-
     const conceptEl = document.createElement("div");
-    conceptEl.style.cssText   = "font-size:13px;font-weight:600;color:var(--text);margin-bottom:3px;";
-    conceptEl.textContent     = item.concept;
+    conceptEl.style.cssText = "font-size:13px;font-weight:600;color:var(--text);margin-bottom:3px;";
+    conceptEl.textContent = item.concept;
     content.appendChild(conceptEl);
-
     if (item.explanation) {
       const explEl = document.createElement("div");
       explEl.style.cssText = "font-size:12px;color:var(--text2);line-height:1.6;";
-      explEl.textContent   = item.explanation;
+      explEl.textContent = item.explanation;
       content.appendChild(explEl);
     }
 
@@ -404,15 +425,9 @@ function renderPrerequisites(text) {
   const legend = document.createElement("div");
   legend.style.cssText = "display:flex;gap:16px;margin-top:6px;padding:10px 4px;";
   legend.innerHTML = `
-    <span style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px;">
-      <span style="width:10px;height:10px;border-radius:2px;background:var(--green);display:inline-block;"></span>Foundational
-    </span>
-    <span style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px;">
-      <span style="width:10px;height:10px;border-radius:2px;background:var(--amber);display:inline-block;"></span>Intermediate
-    </span>
-    <span style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px;">
-      <span style="width:10px;height:10px;border-radius:2px;background:var(--red);display:inline-block;"></span>Advanced
-    </span>`;
+    <span style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:var(--green);display:inline-block;"></span>Foundational</span>
+    <span style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:var(--amber);display:inline-block;"></span>Intermediate</span>
+    <span style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:var(--red);display:inline-block;"></span>Advanced</span>`;
   panel.appendChild(legend);
 }
 
@@ -422,20 +437,14 @@ async function explainTerm() {
   const input = document.getElementById("explainInput");
   const panel = document.getElementById("explainContent");
   const paper = ensureActivePaper();
-
   if (!input || !panel) return;
-
   const term = input.value.trim();
-
   if (!term) { showToast("Please type a term to explain"); return; }
   if (!paper) { showToast("Upload or select a paper first"); return; }
+  if ((paper.indexStatus || "ready") === "indexing") { showToast("Paper is still being indexed."); return; }
 
   clearElement(panel);
-  panel.appendChild(makeComingSoonBox(
-    "🔍",
-    "Looking up term...",
-    `Searching the paper and generating explanation for "${term}". This may take a few seconds.`
-  ));
+  panel.appendChild(makeComingSoonBox("🔍", "Looking up term…", `Generating explanation for "${term}"…`));
 
   try {
     const data = await fetchJson("/api/explain", {
@@ -445,11 +454,7 @@ async function explainTerm() {
     renderExplainResult(data);
   } catch (error) {
     clearElement(panel);
-    panel.appendChild(makeComingSoonBox(
-      "❌",
-      "Explanation Failed",
-      error.message || "Could not explain this term. Check your API key and try again."
-    ));
+    panel.appendChild(makeComingSoonBox("❌", "Explanation Failed", error.message || "Check your API key."));
   }
 }
 
@@ -457,178 +462,129 @@ function renderExplainResult(data) {
   const panel = document.getElementById("explainContent");
   if (!panel) return;
   clearElement(panel);
-
   const { term, from_paper, simple_explanation, chunks_used, found_in_paper } = data;
 
   const badge = document.createElement("div");
-  badge.style.cssText = `
-    display:inline-flex;align-items:center;gap:6px;
-    padding:4px 12px;border-radius:99px;font-size:11px;font-weight:600;
-    margin-bottom:16px;
-    ${found_in_paper
-      ? "background:var(--green-soft);color:var(--green);border:1px solid var(--green);"
-      : "background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber);"}
-  `;
-  badge.textContent = found_in_paper
-    ? `Found in paper (${chunks_used} relevant section${chunks_used !== 1 ? "s" : ""})`
-    : "Not found in paper — using general knowledge";
+  badge.style.cssText = `display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:99px;font-size:11px;font-weight:600;margin-bottom:16px;${found_in_paper ? "background:var(--green-soft);color:var(--green);border:1px solid var(--green);" : "background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber);"}`;
+  badge.textContent = found_in_paper ? `Found in paper (${chunks_used} section${chunks_used !== 1 ? "s" : ""})` : "Not in paper — using general knowledge";
   panel.appendChild(badge);
 
   const heading = document.createElement("div");
-  heading.style.cssText = `font-size:22px;font-weight:700;color:var(--text);
-    margin-bottom:20px;letter-spacing:-0.3px;`;
+  heading.style.cssText = "font-size:22px;font-weight:700;color:var(--text);margin-bottom:20px;letter-spacing:-0.3px;";
   heading.textContent = term.charAt(0).toUpperCase() + term.slice(1);
   panel.appendChild(heading);
 
   function makeCard(icon, title, content, accentColor) {
     const card = document.createElement("div");
-    card.style.cssText = `
-      background:var(--surface);border:1px solid var(--border);
-      border-radius:var(--radius-lg);padding:18px 20px;
-      margin-bottom:14px;border-left:3px solid ${accentColor};`;
-
-    const cardHeader = document.createElement("div");
-    cardHeader.style.cssText = `display:flex;align-items:center;gap:8px;
-      font-size:12px;font-weight:600;color:var(--text2);
-      text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;`;
-    cardHeader.innerHTML = `<span style="font-size:16px;">${icon}</span>${title}`;
-
-    const cardBody = document.createElement("div");
-    cardBody.style.cssText = "font-size:13.5px;color:var(--text);line-height:1.75;";
-    cardBody.textContent   = content;
-
-    card.appendChild(cardHeader);
-    card.appendChild(cardBody);
+    card.style.cssText = `background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px 20px;margin-bottom:14px;border-left:3px solid ${accentColor};`;
+    card.innerHTML = `<div style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;"><span style="font-size:16px;">${icon}</span>${title}</div><div style="font-size:13.5px;color:var(--text);line-height:1.75;">${content}</div>`;
     return card;
   }
-
-  panel.appendChild(makeCard("📄", "From This Paper",  from_paper,          "var(--accent)"));
-  panel.appendChild(makeCard("💡", "In Simple Words",  simple_explanation,  "var(--green)"));
-
+  panel.appendChild(makeCard("📄", "From This Paper", from_paper, "var(--accent)"));
+  panel.appendChild(makeCard("💡", "In Simple Words", simple_explanation, "var(--green)"));
   const hint = document.createElement("div");
-  hint.style.cssText  = "text-align:center;font-size:11.5px;color:var(--text3);margin-top:8px;padding:10px;";
-  hint.textContent    = "Try another term above";
+  hint.style.cssText = "text-align:center;font-size:11.5px;color:var(--text3);margin-top:8px;padding:10px;";
+  hint.textContent = "Try another term above";
   panel.appendChild(hint);
 }
 
 function handleExplainKey(event) {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    void explainTerm();
-  }
+  if (event.key === "Enter") { event.preventDefault(); void explainTerm(); }
 }
 
-/* ── Summary coming soon ──────────────────────────────────────────────────── */
+/* ── Summary / Comparison placeholders ───────────────────────────────────── */
 
 function renderSummaryComingSoon() {
   const panel = document.getElementById("summaryAccordion");
   if (!panel) return;
   clearElement(panel);
-  panel.appendChild(makeComingSoonBox(
-    "📝",
-    "Summary — Coming Soon",
-    "The AI-powered paper summary feature is currently under development. It will automatically generate a concise summary of any uploaded research paper.",
-    "In Development"
-  ));
+  panel.appendChild(makeComingSoonBox("📝", "Summary — Coming Soon", "Auto-generated paper summaries are in development.", "In Development"));
 }
-
-/* ── Comparison coming soon ───────────────────────────────────────────────── */
 
 function renderComparisonComingSoon() {
   const panel = document.getElementById("comparisonContent");
   if (!panel) return;
   clearElement(panel);
-  panel.appendChild(makeComingSoonBox(
-    "⚖️",
-    "Comparison — Coming Soon",
-    "The multi-paper comparison feature is currently under development. It will let you compare difficulty scores and insights across multiple papers side by side.",
-    "In Development"
-  ));
+  panel.appendChild(makeComingSoonBox("⚖️", "Comparison — Coming Soon", "Multi-paper comparison is in development.", "In Development"));
 }
 
-/* ── Tab switching ────────────────────────────────────────────────────────── */
+/* ── Tab switching (with caching) ────────────────────────────────────────── */
 
 function switchTab(name) {
   const validTabs = ["chat", "summary", "insights", "prerequisites", "explain", "comparison"];
-
-  validTabs.forEach(tabName => {
-    const tabEl   = document.getElementById(`tab-${tabName}`);
-    const panelEl = document.getElementById(`panel-${tabName}`);
-    if (tabEl)   tabEl.classList.toggle("active",   tabName === name);
-    if (panelEl) panelEl.classList.toggle("active", tabName === name);
+  validTabs.forEach(t => {
+    document.getElementById(`tab-${t}`)?.classList.toggle("active", t === name);
+    document.getElementById(`panel-${t}`)?.classList.toggle("active", t === name);
   });
 
-  if (name === "summary") {
-    renderSummaryComingSoon();
+  if (name === "summary")    { renderSummaryComingSoon(); return; }
+  if (name === "comparison") { renderComparisonComingSoon(); return; }
 
-  } else if (name === "comparison") {
-    renderComparisonComingSoon();
+  const paper = ensureActivePaper();
 
-  } else if (name === "insights") {
-    const paper = ensureActivePaper();
-    if (!paper) { renderInsights(null); return; }
-
+  // ── INSIGHTS ────────────────────────────────────────────
+  if (name === "insights") {
     const panel = document.getElementById("insightsContent");
-    if (panel) {
-      clearElement(panel);
-      panel.appendChild(makeComingSoonBox("⏳", "Analyzing Paper...",
-        "Running difficulty analysis. This may take a few seconds while Gemini evaluates the paper."));
-    }
-
-    fetchJson("/api/analyze", {
-      method: "POST",
-      body: JSON.stringify({ paper_path: getPaperPath(paper) }),
-    })
-      .then(data => {
-        const analysis  = data.analysis || {};
-        const paperInfo = data.paper    || paper;
-        const updated   = { ...paper, ...paperInfo, analysis, status: "ready" };
-        setPaperState(updated);
-        renderPapers();
-        updatePdfHeader(updated);
-        renderInsights(updated);
-      })
-      .catch(error => {
-        const panel = document.getElementById("insightsContent");
-        if (panel) {
-          clearElement(panel);
-          panel.appendChild(makeComingSoonBox("❌", "Analysis Failed",
-            error.message || "Could not run difficulty analysis. Check your API key and try again."));
-        }
-      });
-
-  } else if (name === "prerequisites") {
-    const paper = ensureActivePaper();
-    if (!paper) {
-      const panel = document.getElementById("prerequisitesContent");
-      if (panel) {
-        clearElement(panel);
-        panel.appendChild(makeComingSoonBox("📚", "No Paper Selected",
-          "Upload or select a paper to extract its prerequisite knowledge roadmap."));
-      }
+    if (!paper) { renderInsights(null); return; }
+    if ((paper.indexStatus || "ready") === "indexing") {
+      if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Indexing in progress…", "Wait for the green dot, then click Insights again.")); }
       return;
     }
 
+    // Return cached result instantly
+    const paperId = getPaperId(paper);
+    const cached  = getCachedTab(paperId, "insights");
+    if (cached) { renderInsights(cached); return; }
+
+    // First time — fetch from server
+    if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Analyzing paper…", "Running difficulty analysis via Gemini. First time only — result will be cached after this.")); }
+
+    fetchJson("/api/analyze", { method: "POST", body: JSON.stringify({ paper_path: getPaperPath(paper) }) })
+      .then(data => {
+        const analysis  = data.analysis || {};
+        const paperInfo = data.paper    || paper;
+        const updated   = { ...paper, ...paperInfo, analysis };
+        setPaperState(updated);
+        renderPapers();
+        setCachedTab(paperId, "insights", updated);
+        renderInsights(updated);
+      })
+      .catch(error => {
+        if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("❌", "Analysis Failed", error.message || "Check your API key.")); }
+      });
+    return;
+  }
+
+  // ── PREREQUISITES ────────────────────────────────────────
+  if (name === "prerequisites") {
     const panel = document.getElementById("prerequisitesContent");
-    if (panel) {
-      clearElement(panel);
-      panel.appendChild(makeComingSoonBox("⏳", "Extracting Prerequisites...",
-        "Gemini is analyzing the paper and building a learning roadmap. This may take 10-20 seconds."));
+    if (!paper) {
+      if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("📚", "No Paper Selected", "Upload or select a paper.")); }
+      return;
+    }
+    if ((paper.indexStatus || "ready") === "indexing") {
+      if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Indexing in progress…", "Wait for the green dot, then click Prerequisites again.")); }
+      return;
     }
 
-    fetchJson("/api/prerequisites", {
-      method: "POST",
-      body: JSON.stringify({ paper_path: getPaperPath(paper) }),
-    })
-      .then(data => { renderPrerequisites(data.prerequisites || ""); })
+    // Return cached result instantly
+    const paperId = getPaperId(paper);
+    const cached  = getCachedTab(paperId, "prerequisites");
+    if (cached) { renderPrerequisites(cached); return; }
+
+    // First time — fetch from server
+    if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Extracting Prerequisites…", "Gemini is building a learning roadmap. First time only — result will be cached after this.")); }
+
+    fetchJson("/api/prerequisites", { method: "POST", body: JSON.stringify({ paper_path: getPaperPath(paper) }) })
+      .then(data => {
+        const result = data.prerequisites || "";
+        setCachedTab(paperId, "prerequisites", result);
+        renderPrerequisites(result);
+      })
       .catch(error => {
-        const panel = document.getElementById("prerequisitesContent");
-        if (panel) {
-          clearElement(panel);
-          panel.appendChild(makeComingSoonBox("❌", "Extraction Failed",
-            error.message || "Could not extract prerequisites. Check your API key and try again."));
-        }
+        if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("❌", "Extraction Failed", error.message || "Check your API key.")); }
       });
+    return;
   }
 }
 
@@ -638,7 +594,7 @@ async function loadPapers() {
   const data   = await fetchJson("/api/papers", { method: "GET" });
   const papers = Array.isArray(data.papers) ? data.papers : [];
 
-  state.papers = papers.map(p => ({ ...p, active: false, status: "ready" }));
+  state.papers = papers.map(p => ({ ...p, active: false }));
 
   const savedId = localStorage.getItem(STORAGE_KEYS.activePaperId);
   if (savedId && state.papers.some(p => getPaperId(p) === savedId)) {
@@ -649,9 +605,12 @@ async function loadPapers() {
     state.activePaperId = null;
   }
 
-  state.papers = state.papers.map(p => ({
-    ...p, active: getPaperId(p) === state.activePaperId,
-  }));
+  state.papers = state.papers.map(p => ({ ...p, active: getPaperId(p) === state.activePaperId }));
+
+  // Resume polling for any papers still mid-index
+  state.papers.forEach(p => {
+    if ((p.indexStatus || "ready") === "indexing") startIndexPolling(p);
+  });
 
   renderPapers();
   updatePdfHeader(ensureActivePaper());
@@ -659,11 +618,18 @@ async function loadPapers() {
 
 async function selectPaper(paperId) {
   setActivePaper(paperId);
-
+  // Re-render the currently active tab for the new paper
   const activeTab = document.querySelector(".tab.active");
   if (activeTab) {
     const name = activeTab.id.replace("tab-", "");
     if (["insights", "prerequisites"].includes(name)) switchTab(name);
+  }
+  // Show/hide progress bar based on new paper's index state
+  const paper = ensureActivePaper();
+  if (paper && (paper.indexStatus || "ready") === "indexing") {
+    showProgressBar(paper.indexPct ?? 0, paper.indexMessage || paper.indexStep || "Indexing…");
+  } else {
+    hideProgressBar();
   }
 }
 
@@ -676,9 +642,8 @@ async function handleFiles(files) {
   for (const file of pdfs) {
     const formData = new FormData();
     formData.append("file", file);
-
     try {
-      showToast(`Uploading ${file.name}...`);
+      showToast(`Uploading ${file.name}…`);
       const response = await fetch(apiUrl("/api/upload"), { method: "POST", body: formData });
       const text     = await response.text();
       let data = {};
@@ -686,16 +651,16 @@ async function handleFiles(files) {
       if (!response.ok) throw new Error(data.error || "Upload failed");
 
       const paper    = data.paper    || {};
-      const analysis = data.analysis || {};
-      const newPaper = { ...paper, analysis, status: "ready", active: true };
-
+      const newPaper = { ...paper, analysis: {}, indexStatus: "indexing", indexPct: 5, active: true };
       state.papers        = [newPaper, ...state.papers.map(p => ({ ...p, active: false }))];
       state.activePaperId = getPaperId(newPaper);
       localStorage.setItem(STORAGE_KEYS.activePaperId, state.activePaperId);
 
       renderPapers();
       updatePdfHeader(newPaper);
-      showToast(`Uploaded: ${file.name}`);
+      showProgressBar(5, "Starting…");
+      showToast(`Uploaded ${file.name} — indexing in background…`);
+      startIndexPolling(newPaper);
     } catch (error) {
       console.error("Upload error:", error);
       showToast(error.message || "Upload failed");
@@ -707,34 +672,27 @@ async function handleFiles(files) {
 
 async function sendMessage() {
   if (state.thinking) return;
-
   const input    = document.getElementById("chatInput");
   const chatArea = document.getElementById("chatArea");
   const thinkEl  = document.getElementById("thinkingMsg");
   const paper    = ensureActivePaper();
-
   if (!input || !chatArea || !thinkEl) return;
   const message = input.value.trim();
   if (!message) return;
   if (!paper) { showToast("Upload or select a paper first"); return; }
+  if ((paper.indexStatus || "ready") === "indexing") { showToast("Paper is still being indexed. Please wait."); return; }
 
-  const userMsg  = document.createElement("div");
-  userMsg.className = "msg user";
-  const body     = document.createElement("div"); body.className   = "msg-body";
-  const bubble   = document.createElement("div"); bubble.className = "msg-bubble";
+  const userMsg = document.createElement("div"); userMsg.className = "msg user";
+  const body    = document.createElement("div"); body.className    = "msg-body";
+  const bubble  = document.createElement("div"); bubble.className  = "msg-bubble";
   bubble.textContent = message;
   body.appendChild(bubble);
-  const avatar   = document.createElement("div"); avatar.className = "msg-avatar";
-  avatar.textContent = "U";
-  userMsg.appendChild(body);
-  userMsg.appendChild(avatar);
+  const avatar = document.createElement("div"); avatar.className = "msg-avatar"; avatar.textContent = "U";
+  userMsg.appendChild(body); userMsg.appendChild(avatar);
   chatArea.insertBefore(userMsg, thinkEl);
-
-  input.value            = "";
-  input.style.height     = "auto";
-  thinkEl.style.display  = "flex";
-  chatArea.scrollTop     = chatArea.scrollHeight;
-  state.thinking         = true;
+  input.value = ""; input.style.height = "auto";
+  thinkEl.style.display = "flex"; chatArea.scrollTop = chatArea.scrollHeight;
+  state.thinking = true;
 
   try {
     const data = await fetchJson("/api/chat", {
@@ -742,50 +700,35 @@ async function sendMessage() {
       body: JSON.stringify({ message, paper_path: getPaperPath(paper) }),
     });
     thinkEl.style.display = "none";
-
-    const aiMsg    = document.createElement("div");   aiMsg.className    = "msg assistant";
-    const aiAvatar = document.createElement("div");   aiAvatar.className = "msg-avatar";
-    aiAvatar.textContent = "PM";
-    const aiBody   = document.createElement("div");   aiBody.className   = "msg-body";
-    const aiBubble = document.createElement("div");   aiBubble.className = "msg-bubble";
+    const aiMsg    = document.createElement("div"); aiMsg.className    = "msg assistant";
+    const aiAvatar = document.createElement("div"); aiAvatar.className = "msg-avatar"; aiAvatar.textContent = "PM";
+    const aiBody   = document.createElement("div"); aiBody.className   = "msg-body";
+    const aiBubble = document.createElement("div"); aiBubble.className = "msg-bubble";
     aiBubble.textContent = data.reply || "No response returned.";
-
-    const actions    = document.createElement("div");     actions.className    = "msg-actions";
-    const copyButton = document.createElement("button");  copyButton.className = "msg-action-btn";
-    copyButton.type        = "button";
-    copyButton.textContent = "Copy";
-    copyButton.addEventListener("click", () => copyText(data.reply || ""));
-    actions.appendChild(copyButton);
-
-    aiBody.appendChild(aiBubble);
-    aiBody.appendChild(actions);
-    aiMsg.appendChild(aiAvatar);
-    aiMsg.appendChild(aiBody);
-    chatArea.insertBefore(aiMsg, thinkEl);
-    chatArea.scrollTop = chatArea.scrollHeight;
+    const actions  = document.createElement("div"); actions.className = "msg-actions";
+    const copyBtn  = document.createElement("button"); copyBtn.className = "msg-action-btn";
+    copyBtn.type = "button"; copyBtn.textContent = "Copy";
+    copyBtn.addEventListener("click", () => copyText(data.reply || ""));
+    actions.appendChild(copyBtn);
+    aiBody.appendChild(aiBubble); aiBody.appendChild(actions);
+    aiMsg.appendChild(aiAvatar); aiMsg.appendChild(aiBody);
+    chatArea.insertBefore(aiMsg, thinkEl); chatArea.scrollTop = chatArea.scrollHeight;
   } catch (error) {
     thinkEl.style.display = "none";
-    const aiMsg    = document.createElement("div");   aiMsg.className    = "msg assistant";
-    const aiAvatar = document.createElement("div");   aiAvatar.className = "msg-avatar";
-    aiAvatar.textContent = "PM";
-    const aiBody   = document.createElement("div");   aiBody.className   = "msg-body";
-    const aiBubble = document.createElement("div");   aiBubble.className = "msg-bubble";
+    const aiMsg    = document.createElement("div"); aiMsg.className    = "msg assistant";
+    const aiAvatar = document.createElement("div"); aiAvatar.className = "msg-avatar"; aiAvatar.textContent = "PM";
+    const aiBody   = document.createElement("div"); aiBody.className   = "msg-body";
+    const aiBubble = document.createElement("div"); aiBubble.className = "msg-bubble";
     aiBubble.textContent = error.message || "Error: Could not get response";
-    aiBody.appendChild(aiBubble);
-    aiMsg.appendChild(aiAvatar);
-    aiMsg.appendChild(aiBody);
-    chatArea.insertBefore(aiMsg, thinkEl);
-    chatArea.scrollTop = chatArea.scrollHeight;
+    aiBody.appendChild(aiBubble); aiMsg.appendChild(aiAvatar); aiMsg.appendChild(aiBody);
+    chatArea.insertBefore(aiMsg, thinkEl); chatArea.scrollTop = chatArea.scrollHeight;
   } finally {
     state.thinking = false;
   }
 }
 
 function handleKey(event) {
-  if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    void sendMessage();
-  }
+  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); }
 }
 
 /* ── Utilities ────────────────────────────────────────────────────────────── */
@@ -808,61 +751,34 @@ function changePage(delta) {
 
 function copyText(text) {
   if (navigator.clipboard) {
-    navigator.clipboard.writeText(text)
-      .then(() => showToast("Copied!"))
-      .catch(() => showToast("Failed to copy"));
+    navigator.clipboard.writeText(text).then(() => showToast("Copied!")).catch(() => showToast("Failed to copy"));
     return;
   }
   const ta = document.createElement("textarea");
-  ta.value = text;
-  document.body.appendChild(ta);
-  ta.select();
-  document.execCommand("copy");
-  document.body.removeChild(ta);
-  showToast("Copied!");
+  ta.value = text; document.body.appendChild(ta); ta.select();
+  document.execCommand("copy"); document.body.removeChild(ta); showToast("Copied!");
 }
 
 function setupResizeHandle() {
   const handle   = document.getElementById("resizeHandle");
   const pdfPanel = document.getElementById("pdfPanel");
   if (!handle || !pdfPanel) return;
-
   let isResizing = false, startX = 0, startWidth = 0;
-
-  handle.addEventListener("mousedown", e => {
-    isResizing = true; startX = e.clientX; startWidth = pdfPanel.offsetWidth;
-    document.body.style.cursor     = "col-resize";
-    document.body.style.userSelect = "none";
-  });
-  document.addEventListener("mousemove", e => {
-    if (!isResizing) return;
-    const newWidth = Math.max(280, Math.min(700, startWidth + (startX - e.clientX)));
-    pdfPanel.style.width = pdfPanel.style.minWidth = `${newWidth}px`;
-  });
-  document.addEventListener("mouseup", () => {
-    if (!isResizing) return;
-    isResizing = false;
-    document.body.style.cursor = document.body.style.userSelect = "";
-    localStorage.setItem(STORAGE_KEYS.pdfPanelWidth, String(pdfPanel.offsetWidth));
-  });
-
+  handle.addEventListener("mousedown", e => { isResizing = true; startX = e.clientX; startWidth = pdfPanel.offsetWidth; document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none"; });
+  document.addEventListener("mousemove", e => { if (!isResizing) return; const nw = Math.max(280, Math.min(700, startWidth + (startX - e.clientX))); pdfPanel.style.width = pdfPanel.style.minWidth = `${nw}px`; });
+  document.addEventListener("mouseup", () => { if (!isResizing) return; isResizing = false; document.body.style.cursor = document.body.style.userSelect = ""; localStorage.setItem(STORAGE_KEYS.pdfPanelWidth, String(pdfPanel.offsetWidth)); });
   const saved = localStorage.getItem(STORAGE_KEYS.pdfPanelWidth);
   if (saved) pdfPanel.style.width = pdfPanel.style.minWidth = `${saved}px`;
 }
 
 function setupUiBindings() {
-  const fileInput  = document.getElementById("fileInput");
-  const dropZone   = document.getElementById("dropZone");
-  const pdfClose   = document.getElementById("pdfCloseBtn");
-  const compareBtn = document.querySelector(".compare-btn");
+  const fileInput = document.getElementById("fileInput");
+  const dropZone  = document.getElementById("dropZone");
+  const pdfClose  = document.getElementById("pdfCloseBtn");
 
   if (fileInput) {
-    fileInput.addEventListener("change", e => {
-      void handleFiles(Array.from(e.target.files || []));
-      e.target.value = "";
-    });
+    fileInput.addEventListener("change", e => { void handleFiles(Array.from(e.target.files || [])); e.target.value = ""; });
   }
-
   if (dropZone) {
     dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.style.opacity = "0.7"; });
     dropZone.addEventListener("dragleave", ()  => { dropZone.style.opacity = "1"; });
@@ -874,15 +790,11 @@ function setupUiBindings() {
     });
     dropZone.addEventListener("click", () => fileInput?.click());
   }
-
-  if (compareBtn) compareBtn.addEventListener("click", () => switchTab("comparison"));
-
+  document.querySelector(".compare-btn")?.addEventListener("click", () => switchTab("comparison"));
   if (pdfClose) {
     pdfClose.addEventListener("click", () => {
-      const pdfPanel     = document.getElementById("pdfPanel");
-      const resizeHandle = document.getElementById("resizeHandle");
-      if (pdfPanel)     pdfPanel.style.display     = "none";
-      if (resizeHandle) resizeHandle.style.display = "none";
+      document.getElementById("pdfPanel")?.style.setProperty("display", "none");
+      document.getElementById("resizeHandle")?.style.setProperty("display", "none");
       showToast("PDF panel hidden");
     });
   }
@@ -898,12 +810,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     const btn = document.getElementById("darkBtn");
     if (btn) btn.textContent = "☀️";
   }
-
   setupUiBindings();
   setupResizeHandle();
   renderSummaryComingSoon();
   renderComparisonComingSoon();
-
   try {
     await loadPapers();
   } catch (error) {
@@ -913,8 +823,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
-/* ── Global function exposure ─────────────────────────────────────────────── */
-
+/* ── Global exposure ──────────────────────────────────────────────────────── */
 window.toggleDark       = toggleDark;
 window.switchTab        = switchTab;
 window.handleKey        = handleKey;

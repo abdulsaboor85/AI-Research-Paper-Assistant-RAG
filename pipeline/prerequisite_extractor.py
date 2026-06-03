@@ -2,7 +2,6 @@ import os
 import re
 import sys
 import time
-from collections import Counter
 
 import pdfplumber
 from dotenv import load_dotenv
@@ -18,30 +17,18 @@ load_dotenv()
 
 
 # =========================================================
-# PDF TEXT EXTRACTION
+# PDF TEXT CLEANING
 # =========================================================
 
 def clean_text(text: str) -> str:
-    """
-    Clean broken PDF text.
-    """
-
-    # remove multiple spaces
     text = re.sub(r"\s+", " ", text)
-
-    # fix weird line joins
     text = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
-
-    # remove references like [12]
     text = re.sub(r"\[\d+\]", "", text)
-
-    # remove URLs
     text = re.sub(r"http\S+", "", text)
-
     return text.strip()
 
 
-def extract_pdf_text(pdf_path):
+def extract_pdf_text(pdf_path: str) -> str:
     text = ""
 
     with pdfplumber.open(pdf_path) as pdf:
@@ -51,9 +38,7 @@ def extract_pdf_text(pdf_path):
             if page_text:
                 text += page_text + "\n"
 
-    text = clean_text(text)
-
-    return text
+    return clean_text(text)
 
 
 # =========================================================
@@ -61,27 +46,14 @@ def extract_pdf_text(pdf_path):
 # =========================================================
 
 def extract_title(text: str) -> str:
-    """
-    Try to extract paper title from first lines.
-    """
 
     lines = text.split("\n")
-
-    cleaned = []
 
     for line in lines[:20]:
         line = line.strip()
 
-        if len(line) < 5:
-            continue
-
-        if len(line.split()) > 20:
-            continue
-
-        cleaned.append(line)
-
-    if cleaned:
-        return cleaned[0]
+        if 5 < len(line) < 150:
+            return line
 
     return "Research Paper"
 
@@ -90,62 +62,61 @@ def extract_title(text: str) -> str:
 # ABSTRACT EXTRACTION
 # =========================================================
 
-def extract_abstract(text):
-    """
-    Extract abstract section properly.
-    """
+def extract_abstract(text: str) -> str:
 
     lower = text.lower()
 
     start = lower.find("abstract")
 
     if start == -1:
-        return text[:3000]
+        return text[:4000]
 
-    abstract_text = text[start:start + 4000]
+    chunk = text[start:start + 6000]
 
-    # stop at introduction
-    intro_idx = abstract_text.lower().find("introduction")
+    end = chunk.lower().find("introduction")
 
-    if intro_idx != -1:
-        abstract_text = abstract_text[:intro_idx]
+    if end != -1:
+        chunk = chunk[:end]
 
-    return abstract_text.strip()
+    return chunk.strip()
 
 
 # =========================================================
-# KEYWORD EXTRACTION
+# INTRODUCTION EXTRACTION
 # =========================================================
 
-STOPWORDS = {
-    "the", "is", "in", "and", "to", "of", "a", "for",
-    "on", "we", "this", "that", "with", "as", "by",
-    "an", "are", "be", "from", "or", "it", "our",
-    "their", "using", "used", "into", "these",
-    "can", "has", "have", "had", "was", "were",
-    "will", "which", "than", "also", "such"
-}
+def extract_introduction(text: str) -> str:
 
+    lower = text.lower()
 
-def extract_keywords(text, top_n=20):
-    """
-    Better keyword extraction.
-    """
+    start = lower.find("introduction")
 
-    words = re.findall(r"\b[a-zA-Z]{4,}\b", text.lower())
+    if start == -1:
+        return text[:6000]
 
-    filtered = [
-        w for w in words
-        if w not in STOPWORDS
+    chunk = text[start:start + 10000]
+
+    stop_words = [
+        "related work",
+        "methodology",
+        "methods",
+        "approach",
+        "experiments",
+        "results"
     ]
 
-    freq = Counter(filtered)
+    lower_chunk = chunk.lower()
 
-    keywords = [
-        word for word, _ in freq.most_common(top_n)
+    positions = [
+        lower_chunk.find(word)
+        for word in stop_words
+        if lower_chunk.find(word) != -1
     ]
 
-    return keywords
+    if positions:
+        chunk = chunk[:min(positions)]
+
+    return chunk.strip()
 
 
 # =========================================================
@@ -159,91 +130,17 @@ class PrerequisiteExtractor:
         api_key = os.getenv("GEMINI_API_KEY")
 
         if not api_key:
-            raise ValueError("❌ GEMINI_API_KEY not found in .env")
+            raise ValueError(
+                "GEMINI_API_KEY environment variable not found."
+            )
 
         self.client = genai.Client(api_key=api_key)
 
     # =====================================================
-    # PROMPT
+    # MODEL CALL
     # =====================================================
 
-    def build_prompt(self, title, abstract, keywords):
-
-        return f"""
-You are an expert AI professor and curriculum designer.
-
-Your task is to create a HIGH-QUALITY prerequisite roadmap for understanding a research paper.
-
-IMPORTANT:
-This is NOT summarization.
-This is NOT keyword extraction.
-
-You must identify the MINIMUM COMPLETE SET of topics a university student should learn BEFORE reading this paper.
-
-==================================================
-RULES
-==================================================
-
-1. OUTPUT ONLY 12-18 ITEMS
-
-2. ORDER:
-Start from basic concepts → advanced concepts.
-
-3. EACH ITEM FORMAT:
-1. Topic Name: Short explanation
-
-4. KEEP TOPICS HIGH-LEVEL
-GOOD:
-- Linear Algebra
-- Probability
-- Neural Networks
-- Transformers
-- Sequence Modeling
-
-BAD:
-- Softmax
-- Query vectors
-- Positional encoding equations
-- Attention weights
-
-5. MERGE RELATED TOPICS
-
-MERGE THESE:
-- RNN + LSTM + GRU → Recurrent Neural Networks
-- Self Attention + Multi Head Attention + QKV → Transformer Attention Mechanisms
-- Encoder + Decoder + Seq2Seq → Sequence-to-Sequence Learning
-- Residual + LayerNorm + FFN → Transformer Architecture
-
-6. REMOVE REDUNDANCY
-
-7. NO HEADINGS
-NO JSON
-NO EXTRA TEXT
-
-==================================================
-PAPER TITLE
-==================================================
-
-{title}
-
-==================================================
-ABSTRACT
-==================================================
-
-{abstract}
-
-==================================================
-KEYWORDS
-==================================================
-
-{", ".join(keywords)}
-"""
-
-    # =====================================================
-    # GEMINI CALL
-    # =====================================================
-
-    def call_model(self, prompt):
+    def call_model(self, prompt: str) -> str:
 
         last_error = None
 
@@ -258,28 +155,107 @@ KEYWORDS
                         contents=prompt
                     )
 
-                    if response and response.text:
+                    if (
+                        response
+                        and hasattr(response, "text")
+                        and response.text
+                    ):
                         return response.text.strip()
 
                 except Exception as e:
+
                     last_error = e
+
+                    print(
+                        f"[WARNING] {model} failed "
+                        f"(attempt {attempt + 1}): {e}"
+                    )
+
                     time.sleep(RETRY_DELAY_SECONDS)
 
-        raise RuntimeError(f"All Gemini models failed. Last error: {last_error}")
+        raise RuntimeError(
+            f"All Gemini models failed. Last error: {last_error}"
+        )
+
+    # =====================================================
+    # CONCEPT EXTRACTION PROMPT
+    # =====================================================
+
+    def build_concept_prompt(
+        self,
+        title: str,
+        abstract: str,
+        intro: str,
+        keywords: list
+    ) -> str:
+
+        return f"""
+Extract the core concepts required to understand this research paper.
+
+RULES:
+- Return 15 to 25 concepts.
+- One concept per line.
+- No explanations.
+- No numbering.
+- No bullet points.
+- No markdown.
+- Focus on technical concepts, theories, algorithms, methods, and prerequisite knowledge.
+
+TITLE:
+{title}
+
+ABSTRACT:
+{abstract}
+
+INTRODUCTION:
+{intro}
+
+KEYWORDS:
+{", ".join(keywords)}
+"""
+
+    # =====================================================
+    # PREREQUISITE PROMPT
+    # =====================================================
+
+    def build_prerequisite_prompt(
+        self,
+        concepts: str
+    ) -> str:
+
+        return f"""
+You are an academic prerequisite extraction system.
+
+Convert the concepts below into a learning roadmap.
+
+RULES:
+- Output exactly 12 to 15 prerequisites.
+- Order topics from beginner to advanced.
+- Format:
+
+1. Topic: Short explanation
+
+- One line per prerequisite.
+- Keep explanations short.
+- No markdown.
+- No bullet points.
+- No headings.
+- No extra text.
+- Output ONLY the numbered list.
+
+CONCEPTS:
+{concepts}
+"""
 
     # =====================================================
     # CLEAN OUTPUT
     # =====================================================
 
     def clean_output(self, text: str) -> str:
-        """
-        Final cleanup for Gemini response.
-        """
 
         lines = text.split("\n")
 
         cleaned = []
-
         seen = set()
 
         for line in lines:
@@ -289,25 +265,37 @@ KEYWORDS
             if not line:
                 continue
 
-            # remove markdown bullets
-            line = re.sub(r"^[-*]\s*", "", line)
+            line = re.sub(
+                r"\*\*(.*?)\*\*",
+                r"\1",
+                line
+            )
 
-            # normalize numbering
-            line = re.sub(r"^\d+\)", "", line).strip()
+            line = re.sub(
+                r"^[-*]\s*",
+                "",
+                line
+            )
 
-            # ensure numbering exists
-            if not re.match(r"^\d+\.", line):
-                line = f"{len(cleaned)+1}. {line}"
+            line = re.sub(
+                r"^\d+[\.\)]\s*",
+                "",
+                line
+            )
 
-            # duplicate removal
-            lower = line.lower()
-
-            if lower in seen:
+            if not line:
                 continue
 
-            seen.add(lower)
+            normalized = line.lower()
 
-            cleaned.append(line)
+            if normalized in seen:
+                continue
+
+            seen.add(normalized)
+
+            cleaned.append(
+                f"{len(cleaned)+1}. {line}"
+            )
 
         return "\n".join(cleaned)
 
@@ -315,55 +303,82 @@ KEYWORDS
     # MAIN EXTRACTION
     # =====================================================
 
-    def extract(self, text):
+    def extract(self, text: str) -> str:
 
         title = extract_title(text)
 
         abstract = extract_abstract(text)
 
-        keywords = extract_keywords(text)
+        intro = extract_introduction(text)
 
-        prompt = self.build_prompt(
-            title=title,
-            abstract=abstract,
-            keywords=keywords
+        keywords = list(
+            set(
+                re.findall(
+                    r"\b[a-zA-Z]{4,}\b",
+                    text.lower()
+                )
+            )
+        )[:20]
+
+        concept_prompt = self.build_concept_prompt(
+            title,
+            abstract,
+            intro,
+            keywords
         )
 
-        result = self.call_model(prompt)
+        concepts = self.call_model(
+            concept_prompt
+        )
 
-        result = self.clean_output(result)
+        prereq_prompt = self.build_prerequisite_prompt(
+            concepts
+        )
 
-        return result
+        roadmap = self.call_model(
+            prereq_prompt
+        )
+
+        return self.clean_output(
+            roadmap
+        )
 
 
 # =========================================================
-# MAIN
+# CLI
 # =========================================================
 
 def main():
 
     if len(sys.argv) < 2:
-        print("Usage:")
-        print("python prerequisite_extractor.py <pdf_path>")
+
+        print(
+            "Usage: python prerequisite_extractor.py <pdf_path>"
+        )
+
         return
 
     pdf_path = sys.argv[1]
 
-    print("\n🚀 Starting Analysis...\n")
+    if not os.path.exists(pdf_path):
+
+        print(
+            f"Error: File not found -> {pdf_path}"
+        )
+
+        return
+
+    print("\nProcessing PDF...\n")
 
     text = extract_pdf_text(pdf_path)
-
-    if len(text.strip()) < 100:
-        print("❌ Failed to extract enough text.")
-        return
 
     extractor = PrerequisiteExtractor()
 
     result = extractor.extract(text)
 
-    print("\n" + "=" * 80)
-    print("🎓 WHAT YOU SHOULD LEARN BEFORE THIS PAPER")
-    print("=" * 80 + "\n")
+    print("\n" + "=" * 70)
+    print("PREREQUISITE LEARNING ROADMAP")
+    print("=" * 70 + "\n")
 
     print(result)
 
