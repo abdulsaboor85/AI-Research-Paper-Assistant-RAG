@@ -1,6 +1,3 @@
-/* ==========================================================================
-   PaperMind — Flask-backed frontend
-   ========================================================================== */
 
 const API_BASE = "http://127.0.0.1:5000";
 const STORAGE_KEYS = {
@@ -16,10 +13,8 @@ const state = {
   totalPages:     0,
   papers:         [],
   activePaperId:  null,
-  // per-paper tab cache: paperId -> { analysis, prerequisites }
-  _tabCache:      {},
-  // polling timers: collectionName -> intervalId
-  _pollingTimers: {},
+  _tabCache:      {},   // paperId -> { insights: data, prerequisites: text }
+  _pollingTimers: {},   // collectionName -> intervalId
 };
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
@@ -74,7 +69,7 @@ function showToast(message) {
   const container = document.getElementById("toastContainer");
   if (!container) return;
   const el = document.createElement("div");
-  el.className = "toast";
+  el.className   = "toast";
   el.textContent = message;
   container.appendChild(el);
   setTimeout(() => el.remove(), 3200);
@@ -82,7 +77,7 @@ function showToast(message) {
 
 function clearElement(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
-/* ── Tab cache helpers ────────────────────────────────────────────────────── */
+/* ── Tab cache ────────────────────────────────────────────────────────────── */
 
 function getCachedTab(paperId, tabName) {
   return state._tabCache[paperId]?.[tabName] ?? null;
@@ -93,32 +88,23 @@ function setCachedTab(paperId, tabName, data) {
   state._tabCache[paperId][tabName] = data;
 }
 
-function clearCacheForPaper(paperId) {
-  delete state._tabCache[paperId];
-}
-
 /* ── Progress bar ─────────────────────────────────────────────────────────── */
 
 function showProgressBar(pct, message) {
   let bar = document.getElementById("indexProgressBar");
   if (!bar) {
     bar = document.createElement("div");
-    bar.id = "indexProgressBar";
+    bar.id        = "indexProgressBar";
     bar.className = "index-progress-bar";
-    bar.innerHTML = `
-      <div class="ipb-track">
-        <div class="ipb-fill" id="ipbFill"></div>
-      </div>
-      <div class="ipb-label" id="ipbLabel"></div>`;
-    // Insert just above the paper list
+    bar.innerHTML = `<div class="ipb-track"><div class="ipb-fill" id="ipbFill"></div></div><div class="ipb-label" id="ipbLabel"></div>`;
     const list = document.getElementById("paperList");
     if (list && list.parentNode) list.parentNode.insertBefore(bar, list);
   }
   bar.style.display = "block";
   const fill = document.getElementById("ipbFill");
   const label = document.getElementById("ipbLabel");
-  if (fill) fill.style.width = `${Math.min(100, Math.max(0, pct))}%`;
-  if (label) label.textContent = message || "";
+  if (fill)  fill.style.width   = `${Math.min(100, Math.max(0, pct))}%`;
+  if (label) label.textContent  = message || "";
 }
 
 function hideProgressBar() {
@@ -153,14 +139,12 @@ function startIndexPolling(paper) {
       const data = await res.json();
       const { status, pct, step, message } = data;
 
-      // Update paper in state
       state.papers = state.papers.map(p =>
         getPaperId(p) !== paperId ? p
           : { ...p, indexStatus: status, indexPct: pct, indexStep: step, indexMessage: message }
       );
       renderPapers();
 
-      // Show progress bar only for the active paper
       if (state.activePaperId === paperId && status === "indexing") {
         showProgressBar(pct, message || step);
       }
@@ -176,7 +160,7 @@ function startIndexPolling(paper) {
         hideProgressBar();
         showToast(`Indexing failed for "${getPaperTitle(paper)}". Try re-uploading.`);
       }
-    } catch { /* network blip — keep polling */ }
+    } catch { /* network blip */ }
   }, 2000);
 
   state._pollingTimers[collectionName] = timer;
@@ -192,7 +176,7 @@ function renderPapers() {
   if (!state.papers.length) {
     const empty = document.createElement("div");
     empty.style.cssText = "padding:16px;text-align:center;color:var(--text3);font-size:12px;";
-    empty.textContent = "No papers yet — upload one to get started";
+    empty.textContent   = "No papers yet — upload one to get started";
     list.appendChild(empty);
     return;
   }
@@ -205,33 +189,27 @@ function renderPapers() {
     const item = document.createElement("div");
     item.className = `paper-item${paper.active ? " active" : ""}`;
 
-    const dot = document.createElement("div");
+    const dot  = document.createElement("div");
     dot.className = idxStatus === "indexing" ? "paper-dot indexing"
                   : idxStatus === "error"    ? "paper-dot error"
                   : "paper-dot ready";
 
-    const info = document.createElement("div");
+    const info  = document.createElement("div");
     info.className = "paper-info";
 
     const title = document.createElement("div");
-    title.className = "paper-title";
+    title.className   = "paper-title";
     title.textContent = getPaperTitle(paper);
 
     const meta = document.createElement("div");
     meta.className = "paper-meta";
 
     if (idxStatus === "indexing") {
-      // Mini progress bar inside sidebar item
-      meta.innerHTML = `
-        <span style="color:var(--amber);">${paper.indexStep || "Indexing…"}</span>
-        <div class="sidebar-mini-bar">
-          <div class="sidebar-mini-fill" style="width:${pct}%"></div>
-        </div>`;
+      meta.innerHTML = `<span style="color:var(--amber);">${paper.indexStep || "Indexing..."}</span>
+        <div class="sidebar-mini-bar"><div class="sidebar-mini-fill" style="width:${pct}%"></div></div>`;
     } else if (idxStatus === "error") {
       meta.textContent = "Index failed";
       meta.style.color = "var(--red)";
-    } else {
-      meta.textContent = "";
     }
 
     info.appendChild(title);
@@ -245,8 +223,7 @@ function renderPapers() {
 
 function updatePdfHeader(paper) {
   const el = document.getElementById("pdfTitle");
-  if (!el) return;
-  el.textContent = paper ? getPaperTitle(paper) : "Select a paper to view";
+  if (el) el.textContent = paper ? getPaperTitle(paper) : "Select a paper to view";
 }
 
 /* ── LOGOUT ───────────────────────────────────────────────────────────────── */
@@ -264,36 +241,31 @@ function renderInsights(paper) {
   if (!panel) return;
   clearElement(panel);
 
-  if (!paper) {
-    panel.appendChild(makeComingSoonBox("📄", "No Paper Selected",
-      "Upload or select a paper to view its difficulty analysis.")); return;
-  }
+  if (!paper) { panel.appendChild(makeComingSoonBox("📄", "No Paper Selected", "Upload or select a paper.")); return; }
   const analysis = paper.analysis;
-  if (!analysis) {
-    panel.appendChild(makeComingSoonBox("⏳", "Analyzing…", "Computing difficulty analysis.")); return;
-  }
+  if (!analysis || !analysis.final_score) { panel.appendChild(makeComingSoonBox("⏳", "Analyzing...", "Computing difficulty analysis.")); return; }
 
   const score  = getPaperScore(paper);
   const label  = getPaperLabel(paper);
   const scores = analysis.scores    || {};
   const brk    = analysis.breakdown || {};
-  const lc = { Easy: "var(--green)", Medium: "var(--amber)", Hard: "var(--red)" };
+  const lc     = { Easy: "var(--green)", Medium: "var(--amber)", Hard: "var(--red)" };
   const labelColor = lc[label] || "var(--accent)";
 
   function makeBar(v, max = 10) {
     const pct = Math.round((v / max) * 100);
-    const w = document.createElement("div");
+    const w   = document.createElement("div");
     w.style.cssText = "background:var(--surface2);border-radius:99px;height:6px;width:100%;margin-top:4px;";
     const f = document.createElement("div");
     f.style.cssText = `height:6px;border-radius:99px;width:${pct}%;background:var(--accent);transition:width 0.4s;`;
     w.appendChild(f); return w;
   }
 
-  const hero = document.createElement("div");
-  hero.style.cssText = "background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;";
-  const pct = score !== null ? Math.round((score / 10) * 100) : 0;
-  const circ = 2 * Math.PI * 36;
+  const hero   = document.createElement("div");
+  const pct    = score !== null ? Math.round((score / 10) * 100) : 0;
+  const circ   = 2 * Math.PI * 36;
   const offset = circ - (pct / 100) * circ;
+  hero.style.cssText = "background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;";
   hero.innerHTML = `
     <div>
       <div style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">Difficulty Score</div>
@@ -318,8 +290,8 @@ function renderInsights(paper) {
   const compCard = document.createElement("div");
   compCard.style.cssText = "background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;margin-bottom:16px;";
   const ct = document.createElement("div");
-  ct.style.cssText = "font-size:13px;font-weight:600;margin-bottom:16px;color:var(--text);";
-  ct.textContent = "Component Scores";
+  ct.style.cssText   = "font-size:13px;font-weight:600;margin-bottom:16px;color:var(--text);";
+  ct.textContent     = "Component Scores";
   compCard.appendChild(ct);
   components.forEach(({ key, label: lbl, weight, icon }) => {
     const val = scores[key];
@@ -336,7 +308,7 @@ function renderInsights(paper) {
   statsCard.style.cssText = "background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;";
   const st = document.createElement("div");
   st.style.cssText = "font-size:13px;font-weight:600;margin-bottom:14px;color:var(--text);";
-  st.textContent = "Paper Statistics";
+  st.textContent   = "Paper Statistics";
   statsCard.appendChild(st);
   const stats = [
     ["Total Sentences", brk.total_sentences ?? "N/A"],
@@ -394,29 +366,26 @@ function renderPrerequisites(text) {
   }
 
   items.forEach((item, idx) => {
-    const card = document.createElement("div");
+    const card          = document.createElement("div");
     const progressColor = idx < items.length * 0.33 ? "var(--green)" : idx < items.length * 0.66 ? "var(--amber)" : "var(--red)";
-    card.style.cssText = `background:var(--surface);border:1px solid var(--border);border-left:3px solid ${progressColor};border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:10px;display:flex;align-items:flex-start;gap:14px;transition:border-color 0.15s,box-shadow 0.15s;`;
-    card.addEventListener("mouseenter", () => { card.style.borderColor = "var(--accent-border)"; card.style.boxShadow = "var(--shadow-sm)"; });
-    card.addEventListener("mouseleave", () => { card.style.borderColor = "var(--border)"; card.style.boxShadow = "none"; });
+    card.style.cssText  = `background:var(--surface);border:1px solid var(--border);border-left:3px solid ${progressColor};border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:10px;display:flex;align-items:flex-start;gap:14px;`;
 
     const badge = document.createElement("div");
     badge.style.cssText = "min-width:28px;height:28px;border-radius:50%;background:var(--accent);color:white;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;margin-top:1px;";
     badge.textContent = item.number;
 
-    const content = document.createElement("div");
+    const content    = document.createElement("div");
     content.style.cssText = "flex:1;min-width:0;";
-    const conceptEl = document.createElement("div");
+    const conceptEl  = document.createElement("div");
     conceptEl.style.cssText = "font-size:13px;font-weight:600;color:var(--text);margin-bottom:3px;";
-    conceptEl.textContent = item.concept;
+    conceptEl.textContent   = item.concept;
     content.appendChild(conceptEl);
     if (item.explanation) {
       const explEl = document.createElement("div");
       explEl.style.cssText = "font-size:12px;color:var(--text2);line-height:1.6;";
-      explEl.textContent = item.explanation;
+      explEl.textContent   = item.explanation;
       content.appendChild(explEl);
     }
-
     card.appendChild(badge);
     card.appendChild(content);
     panel.appendChild(card);
@@ -444,7 +413,7 @@ async function explainTerm() {
   if ((paper.indexStatus || "ready") === "indexing") { showToast("Paper is still being indexed."); return; }
 
   clearElement(panel);
-  panel.appendChild(makeComingSoonBox("🔍", "Looking up term…", `Generating explanation for "${term}"…`));
+  panel.appendChild(makeComingSoonBox("🔍", "Looking up term...", `Generating explanation for "${term}"...`));
 
   try {
     const data = await fetchJson("/api/explain", {
@@ -471,7 +440,7 @@ function renderExplainResult(data) {
 
   const heading = document.createElement("div");
   heading.style.cssText = "font-size:22px;font-weight:700;color:var(--text);margin-bottom:20px;letter-spacing:-0.3px;";
-  heading.textContent = term.charAt(0).toUpperCase() + term.slice(1);
+  heading.textContent   = term.charAt(0).toUpperCase() + term.slice(1);
   panel.appendChild(heading);
 
   function makeCard(icon, title, content, accentColor) {
@@ -482,10 +451,6 @@ function renderExplainResult(data) {
   }
   panel.appendChild(makeCard("📄", "From This Paper", from_paper, "var(--accent)"));
   panel.appendChild(makeCard("💡", "In Simple Words", simple_explanation, "var(--green)"));
-  const hint = document.createElement("div");
-  hint.style.cssText = "text-align:center;font-size:11.5px;color:var(--text3);margin-top:8px;padding:10px;";
-  hint.textContent = "Try another term above";
-  panel.appendChild(hint);
 }
 
 function handleExplainKey(event) {
@@ -508,7 +473,7 @@ function renderComparisonComingSoon() {
   panel.appendChild(makeComingSoonBox("⚖️", "Comparison — Coming Soon", "Multi-paper comparison is in development.", "In Development"));
 }
 
-/* ── Tab switching (with caching) ────────────────────────────────────────── */
+/* ── Tab switching  ── FIXED: cache check happens FIRST, no flicker ─────── */
 
 function switchTab(name) {
   const validTabs = ["chat", "summary", "insights", "prerequisites", "explain", "comparison"];
@@ -522,22 +487,32 @@ function switchTab(name) {
 
   const paper = ensureActivePaper();
 
-  // ── INSIGHTS ────────────────────────────────────────────
+  /* ── INSIGHTS ─────────────────────────────────────────────────────────── */
   if (name === "insights") {
-    const panel = document.getElementById("insightsContent");
+    const panel   = document.getElementById("insightsContent");
     if (!paper) { renderInsights(null); return; }
-    if ((paper.indexStatus || "ready") === "indexing") {
-      if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Indexing in progress…", "Wait for the green dot, then click Insights again.")); }
+
+    const paperId = getPaperId(paper);
+
+    // 1. Return cached instantly — NO loading flash
+    const cached = getCachedTab(paperId, "insights");
+    if (cached) { renderInsights(cached); return; }
+
+    // 2. Paper already has analysis from a previous session's paper object
+    if (paper.analysis && paper.analysis.final_score) {
+      setCachedTab(paperId, "insights", paper);
+      renderInsights(paper);
       return;
     }
 
-    // Return cached result instantly
-    const paperId = getPaperId(paper);
-    const cached  = getCachedTab(paperId, "insights");
-    if (cached) { renderInsights(cached); return; }
+    // 3. Still indexing
+    if ((paper.indexStatus || "ready") === "indexing") {
+      if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Indexing in progress...", "Wait for the green dot, then click Insights again.")); }
+      return;
+    }
 
-    // First time — fetch from server
-    if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Analyzing paper…", "Running difficulty analysis via Gemini. First time only — result will be cached after this.")); }
+    // 4. Need to fetch — show loading only now
+    if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Analyzing paper...", "Running difficulty analysis via Gemini. This runs once and is cached forever after.")); }
 
     fetchJson("/api/analyze", { method: "POST", body: JSON.stringify({ paper_path: getPaperPath(paper) }) })
       .then(data => {
@@ -555,25 +530,28 @@ function switchTab(name) {
     return;
   }
 
-  // ── PREREQUISITES ────────────────────────────────────────
+  /* ── PREREQUISITES ────────────────────────────────────────────────────── */
   if (name === "prerequisites") {
     const panel = document.getElementById("prerequisitesContent");
     if (!paper) {
       if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("📚", "No Paper Selected", "Upload or select a paper.")); }
       return;
     }
+
+    const paperId = getPaperId(paper);
+
+    // 1. Return cached instantly — NO loading flash
+    const cached = getCachedTab(paperId, "prerequisites");
+    if (cached) { renderPrerequisites(cached); return; }
+
+    // 2. Still indexing
     if ((paper.indexStatus || "ready") === "indexing") {
-      if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Indexing in progress…", "Wait for the green dot, then click Prerequisites again.")); }
+      if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Indexing in progress...", "Wait for the green dot, then click Prerequisites again.")); }
       return;
     }
 
-    // Return cached result instantly
-    const paperId = getPaperId(paper);
-    const cached  = getCachedTab(paperId, "prerequisites");
-    if (cached) { renderPrerequisites(cached); return; }
-
-    // First time — fetch from server
-    if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Extracting Prerequisites…", "Gemini is building a learning roadmap. First time only — result will be cached after this.")); }
+    // 3. Need to fetch — show loading only now
+    if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Extracting Prerequisites...", "Gemini is building a learning roadmap. This runs once and is cached forever after.")); }
 
     fetchJson("/api/prerequisites", { method: "POST", body: JSON.stringify({ paper_path: getPaperPath(paper) }) })
       .then(data => {
@@ -607,7 +585,6 @@ async function loadPapers() {
 
   state.papers = state.papers.map(p => ({ ...p, active: getPaperId(p) === state.activePaperId }));
 
-  // Resume polling for any papers still mid-index
   state.papers.forEach(p => {
     if ((p.indexStatus || "ready") === "indexing") startIndexPolling(p);
   });
@@ -618,16 +595,14 @@ async function loadPapers() {
 
 async function selectPaper(paperId) {
   setActivePaper(paperId);
-  // Re-render the currently active tab for the new paper
   const activeTab = document.querySelector(".tab.active");
   if (activeTab) {
     const name = activeTab.id.replace("tab-", "");
     if (["insights", "prerequisites"].includes(name)) switchTab(name);
   }
-  // Show/hide progress bar based on new paper's index state
   const paper = ensureActivePaper();
   if (paper && (paper.indexStatus || "ready") === "indexing") {
-    showProgressBar(paper.indexPct ?? 0, paper.indexMessage || paper.indexStep || "Indexing…");
+    showProgressBar(paper.indexPct ?? 0, paper.indexMessage || paper.indexStep || "Indexing...");
   } else {
     hideProgressBar();
   }
@@ -643,7 +618,7 @@ async function handleFiles(files) {
     const formData = new FormData();
     formData.append("file", file);
     try {
-      showToast(`Uploading ${file.name}…`);
+      showToast(`Uploading ${file.name}...`);
       const response = await fetch(apiUrl("/api/upload"), { method: "POST", body: formData });
       const text     = await response.text();
       let data = {};
@@ -658,11 +633,10 @@ async function handleFiles(files) {
 
       renderPapers();
       updatePdfHeader(newPaper);
-      showProgressBar(5, "Starting…");
-      showToast(`Uploaded ${file.name} — indexing in background…`);
+      showProgressBar(5, "Starting...");
+      showToast(`Uploaded ${file.name} — indexing in background...`);
       startIndexPolling(newPaper);
     } catch (error) {
-      console.error("Upload error:", error);
       showToast(error.message || "Upload failed");
     }
   }
@@ -682,9 +656,9 @@ async function sendMessage() {
   if (!paper) { showToast("Upload or select a paper first"); return; }
   if ((paper.indexStatus || "ready") === "indexing") { showToast("Paper is still being indexed. Please wait."); return; }
 
-  const userMsg = document.createElement("div"); userMsg.className = "msg user";
-  const body    = document.createElement("div"); body.className    = "msg-body";
-  const bubble  = document.createElement("div"); bubble.className  = "msg-bubble";
+  const userMsg  = document.createElement("div"); userMsg.className  = "msg user";
+  const body     = document.createElement("div"); body.className     = "msg-body";
+  const bubble   = document.createElement("div"); bubble.className   = "msg-bubble";
   bubble.textContent = message;
   body.appendChild(bubble);
   const avatar = document.createElement("div"); avatar.className = "msg-avatar"; avatar.textContent = "U";
@@ -706,8 +680,7 @@ async function sendMessage() {
     const aiBubble = document.createElement("div"); aiBubble.className = "msg-bubble";
     aiBubble.textContent = data.reply || "No response returned.";
     const actions  = document.createElement("div"); actions.className = "msg-actions";
-    const copyBtn  = document.createElement("button"); copyBtn.className = "msg-action-btn";
-    copyBtn.type = "button"; copyBtn.textContent = "Copy";
+    const copyBtn  = document.createElement("button"); copyBtn.className = "msg-action-btn"; copyBtn.type = "button"; copyBtn.textContent = "Copy";
     copyBtn.addEventListener("click", () => copyText(data.reply || ""));
     actions.appendChild(copyBtn);
     aiBody.appendChild(aiBubble); aiBody.appendChild(actions);
@@ -781,7 +754,7 @@ function setupUiBindings() {
   }
   if (dropZone) {
     dropZone.addEventListener("dragover",  e => { e.preventDefault(); dropZone.style.opacity = "0.7"; });
-    dropZone.addEventListener("dragleave", ()  => { dropZone.style.opacity = "1"; });
+    dropZone.addEventListener("dragleave", () => { dropZone.style.opacity = "1"; });
     dropZone.addEventListener("drop", e => {
       e.preventDefault(); dropZone.style.opacity = "1";
       const files = Array.from(e.dataTransfer.files || []).filter(f => f.name.toLowerCase().endsWith(".pdf"));
@@ -817,7 +790,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     await loadPapers();
   } catch (error) {
-    console.error("Init failed:", error);
     showToast(error.message || "Failed to load papers");
     renderPapers();
   }

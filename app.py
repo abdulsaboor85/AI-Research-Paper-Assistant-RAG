@@ -42,23 +42,27 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.register_blueprint(auth_bp)
 
 # =========================================================
+# PRE-LOAD HEAVY MODELS AT STARTUP
+# =========================================================
+# Import embedder NOW so SentenceTransformer loads once at startup,
+# not on the first request (which makes the first request very slow).
+print("[startup] Pre-loading embedding model...")
+from embedder import model as _embed_model, client as _chroma_client
+print("[startup] Embedding model ready.")
+
+# =========================================================
 # IN-MEMORY CACHES  (keyed by collection_name)
 # =========================================================
 
-# indexing progress: collection_name -> {status, step, pct, message}
-_index_status: dict[str, dict] = {}
-_index_lock = threading.Lock()
+_index_status:   dict[str, dict] = {}
+_index_lock      = threading.Lock()
 
-# analysis cache: collection_name -> result dict
 _analysis_cache: dict[str, dict] = {}
-_analysis_lock = threading.Lock()
+_analysis_lock   = threading.Lock()
 
-# prerequisites cache: collection_name -> str
-_prereq_cache: dict[str, str] = {}
-_prereq_lock = threading.Lock()
+_prereq_cache:   dict[str, str]  = {}
+_prereq_lock     = threading.Lock()
 
-
-# ── index status helpers ─────────────────────────────────
 
 def _default_status() -> dict:
     return {"status": "ready", "step": "", "pct": 100, "message": ""}
@@ -67,17 +71,12 @@ def set_index_status(collection_name: str, status: str, step: str = "",
                      pct: int = 0, message: str = "") -> None:
     with _index_lock:
         _index_status[collection_name] = {
-            "status":  status,
-            "step":    step,
-            "pct":     pct,
-            "message": message,
+            "status": status, "step": step, "pct": pct, "message": message,
         }
 
 def get_index_status(collection_name: str) -> dict:
     with _index_lock:
         return _index_status.get(collection_name, _default_status())
-
-# ── analysis cache helpers ───────────────────────────────
 
 def get_cached_analysis(collection_name: str) -> dict | None:
     with _analysis_lock:
@@ -86,8 +85,6 @@ def get_cached_analysis(collection_name: str) -> dict | None:
 def set_cached_analysis(collection_name: str, result: dict) -> None:
     with _analysis_lock:
         _analysis_cache[collection_name] = result
-
-# ── prerequisites cache helpers ──────────────────────────
 
 def get_cached_prereqs(collection_name: str) -> str | None:
     with _prereq_lock:
@@ -170,61 +167,35 @@ def list_papers() -> list[dict[str, Any]]:
 # INDEXING
 # =========================================================
 
-def index_paper(pdf_path: Path, collection_name: str, force: bool = False) -> None:
-    """Run extract → chunk → embed. Pass force=True to re-embed even if cached."""
-    from chunker   import chunk_text
-    from embedder  import embed_and_store
-    from extractor import extract_text
-
-    full_text = extract_text(str(pdf_path))
-    if len(full_text.strip()) < 100:
-        raise ValueError("Could not extract enough text from PDF.")
-
-    chunks = chunk_text(full_text)
-    if not chunks:
-        raise ValueError("Chunking produced no chunks.")
-
-    embed_and_store(chunks, collection_name=collection_name, force=force)
-
-
 def index_paper_background(pdf_path: Path, collection_name: str) -> None:
     """
-    Background indexing with granular progress updates.
-    Steps: extract (0-20%) → chunk (20-40%) → embed (40-95%) → done (100%)
+    Background indexing. Uses pre-loaded model singleton - no reload cost.
+    Steps: extract (0-20%) -> chunk (20-40%) -> embed (40-95%) -> done (100%)
     """
-    set_index_status(collection_name, "indexing", "Starting…", 5,
-                     "Preparing to index paper")
+    set_index_status(collection_name, "indexing", "Starting...", 5, "Preparing to index")
 
     def _run() -> None:
         try:
-            from chunker   import chunk_text
-            from embedder  import embed_and_store, collection_exists_and_has_data
+            from chunker  import chunk_text
+            from embedder import embed_and_store, collection_exists_and_has_data
             from extractor import extract_text
 
-            # ── Step 1: Extract ──────────────────────────────
-            set_index_status(collection_name, "indexing", "Extracting text", 15,
-                             "Reading PDF text…")
+            set_index_status(collection_name, "indexing", "Extracting text", 15, "Reading PDF text...")
             full_text = extract_text(str(pdf_path))
             if len(full_text.strip()) < 100:
                 raise ValueError("Could not extract enough text from PDF.")
 
-            # ── Step 2: Chunk ────────────────────────────────
-            set_index_status(collection_name, "indexing", "Chunking", 35,
-                             "Splitting into chunks…")
+            set_index_status(collection_name, "indexing", "Chunking", 35, "Splitting into chunks...")
             chunks = chunk_text(full_text)
             if not chunks:
                 raise ValueError("Chunking produced no chunks.")
 
-            # ── Step 3: Embed (skip if already done) ─────────
             if collection_exists_and_has_data(collection_name):
-                set_index_status(collection_name, "indexing", "Already indexed", 90,
-                                 "Using cached embeddings…")
+                set_index_status(collection_name, "indexing", "Already indexed", 90, "Using cached embeddings...")
             else:
-                set_index_status(collection_name, "indexing", "Embedding", 55,
-                                 f"Embedding {len(chunks)} chunks…")
+                set_index_status(collection_name, "indexing", "Embedding", 55, f"Embedding {len(chunks)} chunks...")
                 embed_and_store(chunks, collection_name=collection_name, force=False)
 
-            # ── Done ─────────────────────────────────────────
             set_index_status(collection_name, "ready", "Done", 100, "Ready")
             print(f"[indexer] {collection_name} ready.")
 
@@ -249,7 +220,6 @@ def analyze_paper(pdf_path: Path) -> dict[str, Any]:
 
     collection_name = collection_name_from_path(pdf_path)
 
-    # Return cached result immediately
     cached = get_cached_analysis(collection_name)
     if cached:
         print(f"[analyze] Returning cached analysis for {collection_name}")
@@ -320,7 +290,7 @@ def api_papers() -> Any:
 
 
 # =========================================================
-# API — INDEXING STATUS  (with progress %)
+# API — INDEXING STATUS
 # =========================================================
 
 @app.get("/api/status/<path:paper_path>")
@@ -332,10 +302,8 @@ def api_status(paper_path: str) -> Any:
         collection_name = collection_name_from_path(pdf_path)
         info            = get_index_status(collection_name)
         return jsonify({
-            "status":      info["status"],
-            "step":        info["step"],
-            "pct":         info["pct"],
-            "message":     info["message"],
+            "status": info["status"], "step": info["step"],
+            "pct": info["pct"], "message": info["message"],
             "collectionName": collection_name,
         })
     except Exception as exc:
@@ -343,7 +311,7 @@ def api_status(paper_path: str) -> Any:
 
 
 # =========================================================
-# API — UPLOAD  (instant response, background index)
+# API — UPLOAD
 # =========================================================
 
 @app.post("/api/upload")
@@ -389,7 +357,6 @@ def api_analyze() -> Any:
         pdf_path = normalize_pdf_path(str(raw_path))
         result   = analyze_paper(pdf_path)
         paper    = result.pop("paper") if "paper" in result else paper_record(pdf_path)
-        # Re-attach paper info without mutating the cache entry
         return jsonify({"paper": paper, "analysis": result})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
@@ -407,7 +374,7 @@ def api_chat() -> Any:
     from qa_engine import answer_question
     from retriever import retrieve_relevant_chunks
 
-    data = request.get_json(silent=True) or {}
+    data     = request.get_json(silent=True) or {}
     question = (data.get("message") or data.get("question") or "").strip()
     if not question:
         return jsonify({"error": "message is required."}), 400
@@ -416,7 +383,7 @@ def api_chat() -> Any:
         collection_name = resolve_collection_name(data)
         info = get_index_status(collection_name)
         if info["status"] == "indexing":
-            return jsonify({"error": "Paper is still being indexed. Please wait a moment."}), 409
+            return jsonify({"error": "Paper is still being indexed. Please wait."}), 409
         if info["status"] == "error":
             return jsonify({"error": "Indexing failed. Try re-uploading."}), 500
 
@@ -439,7 +406,7 @@ def api_prerequisites() -> Any:
     try:
         from prerequisite_extractor import PrerequisiteExtractor, extract_pdf_text
 
-        data = request.get_json(silent=True) or {}
+        data     = request.get_json(silent=True) or {}
         raw_path = (data.get("paper_path") or data.get("path") or data.get("paperId"))
         if not raw_path:
             return jsonify({"error": "paper_path is required."}), 400
@@ -447,7 +414,6 @@ def api_prerequisites() -> Any:
         pdf_path        = normalize_pdf_path(str(raw_path))
         collection_name = collection_name_from_path(pdf_path)
 
-        # Return cached result immediately
         cached = get_cached_prereqs(collection_name)
         if cached is not None:
             print(f"[prereqs] Returning cached prerequisites for {collection_name}")
@@ -517,10 +483,18 @@ def hello() -> Any:
 
 
 # =========================================================
-# MAIN
+# MAIN  —  debug=True but use_reloader=FALSE
+# use_reloader=True kills background threads + reloads the
+# process on any file save, which nukes the in-memory caches
+# and forces model re-load.  Turn it off.
 # =========================================================
 
 if __name__ == "__main__":
     print("\nFlask server starting...")
     print("http://127.0.0.1:5000\n")
-    app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=True)
+    app.run(
+        host="127.0.0.1",
+        port=5000,
+        debug=True,
+        use_reloader=False,   # <-- CRITICAL FIX: keeps background threads alive
+    )
