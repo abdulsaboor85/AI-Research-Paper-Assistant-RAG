@@ -7,11 +7,13 @@ FYP Module  : AI-Powered Research Paper Assistant (RAG)
 Feature     : Term Explainer
 Author      : Abdul Saboor
 
-Explains any term/concept in two ways:
+Explains any term/concept in three ways:
   1. From the paper  — what this paper says about it
                        (or honestly says it's not covered)
   2. Simple words    — plain English explanation,
                        always framed in the paper's domain
+  3. Real-world example — a concrete analogy or scenario
+                          anyone can relate to
 """
 
 import os
@@ -35,7 +37,7 @@ def build_explain_prompt(term: str, chunks: list[str], paper_title: str = "") ->
     """
     Builds the Gemini prompt for term explanation.
 
-    Two-part output is enforced via strict format tags so the
+    Three-part output is enforced via strict format tags so the
     frontend can parse them reliably.
     """
 
@@ -45,10 +47,8 @@ def build_explain_prompt(term: str, chunks: list[str], paper_title: str = "") ->
             for i, chunk in enumerate(chunks, start=1)
         ]
         context_block = "\n\n---\n\n".join(labeled)
-        has_context = True
     else:
         context_block = "No relevant chunks were found in this paper for the given term."
-        has_context = False
 
     paper_hint = f'The paper is titled: "{paper_title}".' if paper_title else ""
 
@@ -77,14 +77,23 @@ SIMPLE_EXPLANATION_START
 - Use everyday language a high school student could understand.
 - NO jargon unless you immediately explain it.
 - Frame it in the context of {f'the paper domain ({paper_title})' if paper_title else 'the research paper domain'}.
-- Use a real-world analogy if it helps.]
+- Do NOT include an example here — that goes in the next section.]
 SIMPLE_EXPLANATION_END
+
+REAL_WORLD_EXAMPLE_START
+[Give ONE concrete real-world example or analogy that makes "{term}" crystal clear.
+- Format: start with "Example:" then the analogy/scenario.
+- Make it vivid, specific, and relatable (everyday life, cooking, sports, travel, etc.).
+- The example should make someone say "oh, NOW I get it!"
+- 3-5 sentences maximum.
+- NO jargon at all.]
+REAL_WORLD_EXAMPLE_END
 
 === STRICT RULES ===
 - Never fabricate what the paper says. Only report what is in the chunks.
-- The simple explanation must always be written even if the paper does not cover the term.
+- The simple explanation and real-world example must always be written even if the paper does not cover the term.
 - Do not use markdown (no **, no #, no bullet points with *).
-- Do not add any text outside the two tagged sections.
+- Do not add any text outside the three tagged sections.
 - Write in clear, warm, encouraging academic English.
 """
 
@@ -95,17 +104,19 @@ SIMPLE_EXPLANATION_END
 
 def parse_explain_response(raw: str) -> dict:
     """
-    Extracts the two sections from Gemini's tagged response.
+    Extracts the three sections from Gemini's tagged response.
 
     Returns:
         dict with keys:
-            from_paper      (str)
-            simple_explanation (str)
-            parse_ok        (bool)
+            from_paper           (str)
+            simple_explanation   (str)
+            real_world_example   (str)
+            parse_ok             (bool)
     """
 
-    from_paper = ""
+    from_paper         = ""
     simple_explanation = ""
+    real_world_example = ""
 
     # Extract FROM_PAPER section
     paper_match = re.search(
@@ -125,19 +136,29 @@ def parse_explain_response(raw: str) -> dict:
     if simple_match:
         simple_explanation = simple_match.group(1).strip()
 
-    parse_ok = bool(from_paper and simple_explanation)
+    # Extract REAL_WORLD_EXAMPLE section
+    example_match = re.search(
+        r"REAL_WORLD_EXAMPLE_START\s*(.*?)\s*REAL_WORLD_EXAMPLE_END",
+        raw,
+        re.DOTALL,
+    )
+    if example_match:
+        real_world_example = example_match.group(1).strip()
+
+    parse_ok = bool(from_paper and simple_explanation and real_world_example)
 
     # Graceful fallback if parsing fails
     if not parse_ok:
-        # Try to split raw text in half as last resort
         lines = [l.strip() for l in raw.strip().split("\n") if l.strip()]
-        mid = len(lines) // 2
-        from_paper = from_paper or " ".join(lines[:mid]) or raw.strip()
-        simple_explanation = simple_explanation or " ".join(lines[mid:]) or raw.strip()
+        third = len(lines) // 3
+        from_paper         = from_paper         or " ".join(lines[:third])         or raw.strip()
+        simple_explanation = simple_explanation or " ".join(lines[third:2*third])  or raw.strip()
+        real_world_example = real_world_example or " ".join(lines[2*third:])       or ""
 
     return {
         "from_paper":           from_paper,
         "simple_explanation":   simple_explanation,
+        "real_world_example":   real_world_example,
         "parse_ok":             parse_ok,
     }
 
@@ -149,7 +170,6 @@ def parse_explain_response(raw: str) -> dict:
 def call_gemini(prompt: str, api_key: str) -> str:
     """
     Calls Gemini using the shared model pool with retry logic.
-    Same pattern used across difficulty_scorer and qa_engine.
 
     Returns raw response text.
     Raises RuntimeError if all models fail.
@@ -230,6 +250,7 @@ def explain_term(
             "term"              : str,   # original term
             "from_paper"        : str,   # what the paper says (or honest fallback)
             "simple_explanation": str,   # plain English explanation
+            "real_world_example": str,   # concrete analogy / scenario
             "chunks_used"       : int,   # how many chunks were found
             "found_in_paper"    : bool,  # True if relevant chunks existed
         }
@@ -252,6 +273,7 @@ def explain_term(
         "term":               term,
         "from_paper":         parsed["from_paper"],
         "simple_explanation": parsed["simple_explanation"],
+        "real_world_example": parsed["real_world_example"],
         "chunks_used":        len(chunks),
         "found_in_paper":     found_in_paper,
     }

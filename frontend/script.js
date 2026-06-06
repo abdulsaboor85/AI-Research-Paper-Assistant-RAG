@@ -1,4 +1,3 @@
-
 const API_BASE = "http://127.0.0.1:5000";
 const STORAGE_KEYS = {
   darkMode:      "papermind_darkMode",
@@ -14,6 +13,7 @@ const state = {
   papers:         [],
   activePaperId:  null,
   _tabCache:      {},   // paperId -> { insights: data, prerequisites: text }
+  _explainCache:  {},   // "paperId::term_lowercase" -> explain result dict
   _pollingTimers: {},   // collectionName -> intervalId
 };
 
@@ -332,6 +332,29 @@ function renderInsights(paper) {
 
 /* ── PREREQUISITES TAB ────────────────────────────────────────────────────── */
 
+/**
+ * Called when a prerequisite card is clicked.
+ * Switches to the Explain tab and auto-searches the clicked concept.
+ */
+function explainPrerequisite(concept) {
+  // Switch to the explain tab
+  switchTab("explain");
+
+  // Wait a tick for the panel to become visible, then fill the input and trigger
+  setTimeout(() => {
+    const input = document.getElementById("explainInput");
+    if (input) {
+      input.value = concept;
+      // Trigger a brief highlight animation on the input
+      input.style.transition = "box-shadow 0.3s";
+      input.style.boxShadow  = "0 0 0 3px rgba(45, 91, 227, 0.35)";
+      setTimeout(() => { input.style.boxShadow = ""; }, 1200);
+    }
+    // Auto-run the explanation
+    void explainTerm();
+  }, 80);
+}
+
 function renderPrerequisites(text) {
   const panel = document.getElementById("prerequisitesContent");
   if (!panel) return;
@@ -343,7 +366,14 @@ function renderPrerequisites(text) {
 
   const banner = document.createElement("div");
   banner.style.cssText = "background:var(--accent-soft);border:1px solid var(--accent-border);border-radius:var(--radius-lg);padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:10px;";
-  banner.innerHTML = `<span style="font-size:20px;">🎓</span><div><div style="font-size:13px;font-weight:600;color:var(--accent);">Learning Roadmap</div><div style="font-size:11px;color:var(--text2);margin-top:2px;">Minimum prerequisites — fundamental to advanced.</div></div>`;
+  banner.innerHTML = `
+    <span style="font-size:20px;">🎓</span>
+    <div>
+      <div style="font-size:13px;font-weight:600;color:var(--accent);">Learning Roadmap</div>
+      <div style="font-size:11px;color:var(--text2);margin-top:2px;">
+        Click any topic to get an instant explanation in simple words.
+      </div>
+    </div>`;
   panel.appendChild(banner);
 
   const lines = text.trim().split("\n").filter(l => l.trim());
@@ -368,7 +398,40 @@ function renderPrerequisites(text) {
   items.forEach((item, idx) => {
     const card          = document.createElement("div");
     const progressColor = idx < items.length * 0.33 ? "var(--green)" : idx < items.length * 0.66 ? "var(--amber)" : "var(--red)";
-    card.style.cssText  = `background:var(--surface);border:1px solid var(--border);border-left:3px solid ${progressColor};border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:10px;display:flex;align-items:flex-start;gap:14px;`;
+
+    // Make card look clickable
+    card.style.cssText  = [
+      `background:var(--surface)`,
+      `border:1px solid var(--border)`,
+      `border-left:3px solid ${progressColor}`,
+      `border-radius:var(--radius-lg)`,
+      `padding:14px 16px`,
+      `margin-bottom:10px`,
+      `display:flex`,
+      `align-items:flex-start`,
+      `gap:14px`,
+      `cursor:pointer`,
+      `transition:background 0.15s, box-shadow 0.15s, transform 0.1s`,
+    ].join(";");
+
+    // Hover effects via JS (keeps CSS vars working)
+    card.addEventListener("mouseenter", () => {
+      card.style.background  = "var(--accent-soft)";
+      card.style.boxShadow   = "0 2px 10px rgba(45,91,227,0.12)";
+      card.style.transform   = "translateY(-1px)";
+      card.style.borderColor = "var(--accent-border)";
+    });
+    card.addEventListener("mouseleave", () => {
+      card.style.background  = "var(--surface)";
+      card.style.boxShadow   = "";
+      card.style.transform   = "";
+      card.style.borderColor = "";
+    });
+
+    // Click → jump to Explain tab
+    card.addEventListener("click", () => {
+      explainPrerequisite(item.concept);
+    });
 
     const badge = document.createElement("div");
     badge.style.cssText = "min-width:28px;height:28px;border-radius:50%;background:var(--accent);color:white;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;margin-top:1px;";
@@ -376,16 +439,44 @@ function renderPrerequisites(text) {
 
     const content    = document.createElement("div");
     content.style.cssText = "flex:1;min-width:0;";
+
+    const conceptRow = document.createElement("div");
+    conceptRow.style.cssText = "display:flex;align-items:center;justify-content:space-between;gap:8px;";
+
     const conceptEl  = document.createElement("div");
     conceptEl.style.cssText = "font-size:13px;font-weight:600;color:var(--text);margin-bottom:3px;";
     conceptEl.textContent   = item.concept;
-    content.appendChild(conceptEl);
+
+    // Small "explain" chip hint
+    const chip = document.createElement("span");
+    chip.style.cssText = [
+      "font-size:10px",
+      "color:var(--accent)",
+      "background:var(--accent-soft)",
+      "border:1px solid var(--accent-border)",
+      "border-radius:99px",
+      "padding:2px 8px",
+      "white-space:nowrap",
+      "flex-shrink:0",
+      "opacity:0",
+      "transition:opacity 0.2s",
+    ].join(";");
+    chip.textContent = "Explain →";
+
+    card.addEventListener("mouseenter", () => { chip.style.opacity = "1"; });
+    card.addEventListener("mouseleave", () => { chip.style.opacity = "0"; });
+
+    conceptRow.appendChild(conceptEl);
+    conceptRow.appendChild(chip);
+    content.appendChild(conceptRow);
+
     if (item.explanation) {
       const explEl = document.createElement("div");
       explEl.style.cssText = "font-size:12px;color:var(--text2);line-height:1.6;";
       explEl.textContent   = item.explanation;
       content.appendChild(explEl);
     }
+
     card.appendChild(badge);
     card.appendChild(content);
     panel.appendChild(card);
@@ -396,11 +487,137 @@ function renderPrerequisites(text) {
   legend.innerHTML = `
     <span style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:var(--green);display:inline-block;"></span>Foundational</span>
     <span style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:var(--amber);display:inline-block;"></span>Intermediate</span>
-    <span style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:var(--red);display:inline-block;"></span>Advanced</span>`;
+    <span style="font-size:11px;color:var(--text3);display:flex;align-items:center;gap:5px;"><span style="width:10px;height:10px;border-radius:2px;background:var(--red);display:inline-block;"></span>Advanced</span>
+    <span style="font-size:11px;color:var(--text3);margin-left:auto;display:flex;align-items:center;gap:4px;">
+      <span style="font-size:13px;">👆</span> Click any topic to explain it
+    </span>`;
   panel.appendChild(legend);
 }
 
 /* ── EXPLAIN TAB ──────────────────────────────────────────────────────────── */
+
+/* ── Explain cache helpers ────────────────────────────────────────────────── */
+
+function _explainCacheKey(paperId, term) {
+  return `${paperId}::${term.toLowerCase().trim()}`;
+}
+
+function getExplainCache(paperId, term) {
+  return state._explainCache[_explainCacheKey(paperId, term)] ?? null;
+}
+
+function setExplainCache(paperId, term, data) {
+  state._explainCache[_explainCacheKey(paperId, term)] = data;
+}
+
+/* ── Explain loading card — one-shot progress bar, no loop ────────────────── */
+
+// Each step: [targetPct, label, delay_ms_to_reach_it]
+const _EXPLAIN_STEPS = [
+  [15,  "Retrieving relevant sections from paper…",  400],
+  [35,  "Sending context to Gemini…",                1200],
+  [55,  "Gemini is reading the paper…",              3000],
+  [75,  "Generating explanation…",                   6000],
+  [90,  "Preparing your answer…",                    10000],
+  [95,  "Waiting for Gemini response…",              0],   // stays here until done
+];
+
+function makeExplainLoadingCard(term) {
+  // Inject styles once
+  if (!document.getElementById("explainAnimStyles")) {
+    const style = document.createElement("style");
+    style.id = "explainAnimStyles";
+    style.textContent = `
+      @keyframes shimmer {
+        0%,100% { opacity:0.35; }
+        50%      { opacity:0.75; }
+      }
+      #explainProgressFill {
+        transition: width 0.6s ease;
+      }`;
+    document.head.appendChild(style);
+  }
+
+  const wrap = document.createElement("div");
+  wrap.id = "explainLoadingCard";
+  wrap.style.cssText = [
+    "background:var(--surface)",
+    "border:1px solid var(--border)",
+    "border-radius:var(--radius-lg)",
+    "padding:28px 24px",
+    "margin-top:8px",
+  ].join(";");
+
+  wrap.innerHTML = `
+    <div style="margin-bottom:18px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+        <div style="font-size:13px;font-weight:600;color:var(--text);">
+          Explaining <span style="color:var(--accent);">"${term}"</span>
+        </div>
+        <div id="explainProgressPct" style="font-size:12px;font-weight:600;color:var(--accent);">0%</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:99px;height:7px;width:100%;overflow:hidden;">
+        <div id="explainProgressFill"
+             style="height:7px;border-radius:99px;background:var(--accent);width:0%;"></div>
+      </div>
+      <div id="explainProgressLabel"
+           style="font-size:11px;color:var(--text3);margin-top:8px;">
+        Starting…
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      ${["📄 From This Paper", "💡 In Simple Words", "🌍 Real-World Example"].map(label => `
+        <div style="border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;opacity:0.5;">
+          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:9px;">${label}</div>
+          <div style="background:var(--surface2);border-radius:5px;height:9px;width:82%;margin-bottom:6px;animation:shimmer 1.6s ease-in-out infinite;"></div>
+          <div style="background:var(--surface2);border-radius:5px;height:9px;width:65%;margin-bottom:6px;animation:shimmer 1.6s ease-in-out infinite 0.2s;"></div>
+          <div style="background:var(--surface2);border-radius:5px;height:9px;width:50%;animation:shimmer 1.6s ease-in-out infinite 0.4s;"></div>
+        </div>`).join("")}
+    </div>`;
+
+  return wrap;
+}
+
+/**
+ * Advances the progress bar through fixed steps, then holds at 95%.
+ * Returns a stop function — call it when the API responds.
+ */
+function startExplainProgress() {
+  let currentStep = 0;
+  let stopped = false;
+
+  function setProgress(pct, label) {
+    const fill  = document.getElementById("explainProgressFill");
+    const pctEl = document.getElementById("explainProgressPct");
+    const lblEl = document.getElementById("explainProgressLabel");
+    if (fill)  fill.style.width    = `${pct}%`;
+    if (pctEl) pctEl.textContent   = `${pct}%`;
+    if (lblEl) lblEl.textContent   = label;
+  }
+
+  function advance() {
+    if (stopped || currentStep >= _EXPLAIN_STEPS.length) return;
+    const [pct, label, delay] = _EXPLAIN_STEPS[currentStep];
+    setProgress(pct, label);
+    currentStep++;
+    // Schedule next step only if there IS a next step and it has a delay
+    if (currentStep < _EXPLAIN_STEPS.length - 1 && delay > 0) {
+      setTimeout(advance, delay);
+    }
+    // Last entry (95%) — just set it and stop scheduling
+  }
+
+  // Kick off immediately
+  advance();
+
+  return function stop() {
+    stopped = true;
+    setProgress(100, "Done!");
+  };
+}
+
+/* ── explainTerm — with cache + animated loading ──────────────────────────── */
 
 async function explainTerm() {
   const input = document.getElementById("explainInput");
@@ -412,16 +629,30 @@ async function explainTerm() {
   if (!paper) { showToast("Upload or select a paper first"); return; }
   if ((paper.indexStatus || "ready") === "indexing") { showToast("Paper is still being indexed."); return; }
 
+  const paperId = getPaperId(paper);
+
+  // ── Cache hit — instant return ──
+  const cached = getExplainCache(paperId, term);
+  if (cached) {
+    renderExplainResult(cached);
+    return;
+  }
+
+  // ── Cache miss — show non-looping progress bar ──
   clearElement(panel);
-  panel.appendChild(makeComingSoonBox("🔍", "Looking up term...", `Generating explanation for "${term}"...`));
+  panel.appendChild(makeExplainLoadingCard(term));
+  const stopProgress = startExplainProgress();
 
   try {
     const data = await fetchJson("/api/explain", {
       method: "POST",
       body: JSON.stringify({ term, paper_path: getPaperPath(paper) }),
     });
+    stopProgress();
+    setExplainCache(paperId, term, data);   // store for instant re-use
     renderExplainResult(data);
   } catch (error) {
+    stopProgress();
     clearElement(panel);
     panel.appendChild(makeComingSoonBox("❌", "Explanation Failed", error.message || "Check your API key."));
   }
@@ -431,26 +662,98 @@ function renderExplainResult(data) {
   const panel = document.getElementById("explainContent");
   if (!panel) return;
   clearElement(panel);
-  const { term, from_paper, simple_explanation, chunks_used, found_in_paper } = data;
 
+  const {
+    term,
+    from_paper,
+    simple_explanation,
+    real_world_example,
+    chunks_used,
+    found_in_paper,
+  } = data;
+
+  // ── Source badge ──
   const badge = document.createElement("div");
-  badge.style.cssText = `display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:99px;font-size:11px;font-weight:600;margin-bottom:16px;${found_in_paper ? "background:var(--green-soft);color:var(--green);border:1px solid var(--green);" : "background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber);"}`;
-  badge.textContent = found_in_paper ? `Found in paper (${chunks_used} section${chunks_used !== 1 ? "s" : ""})` : "Not in paper — using general knowledge";
+  badge.style.cssText = [
+    "display:inline-flex",
+    "align-items:center",
+    "gap:6px",
+    "padding:4px 12px",
+    "border-radius:99px",
+    "font-size:11px",
+    "font-weight:600",
+    "margin-bottom:16px",
+    found_in_paper
+      ? "background:var(--green-soft);color:var(--green);border:1px solid var(--green);"
+      : "background:var(--amber-soft);color:var(--amber);border:1px solid var(--amber);",
+  ].join(";");
+  badge.textContent = found_in_paper
+    ? `Found in paper (${chunks_used} section${chunks_used !== 1 ? "s" : ""})`
+    : "Not in paper — using general knowledge";
   panel.appendChild(badge);
 
+  // ── Term heading ──
   const heading = document.createElement("div");
   heading.style.cssText = "font-size:22px;font-weight:700;color:var(--text);margin-bottom:20px;letter-spacing:-0.3px;";
   heading.textContent   = term.charAt(0).toUpperCase() + term.slice(1);
   panel.appendChild(heading);
 
+  // ── Card builder ──
   function makeCard(icon, title, content, accentColor) {
     const card = document.createElement("div");
-    card.style.cssText = `background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px 20px;margin-bottom:14px;border-left:3px solid ${accentColor};`;
-    card.innerHTML = `<div style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;"><span style="font-size:16px;">${icon}</span>${title}</div><div style="font-size:13.5px;color:var(--text);line-height:1.75;">${content}</div>`;
+    card.style.cssText = [
+      "background:var(--surface)",
+      "border:1px solid var(--border)",
+      "border-radius:var(--radius-lg)",
+      "padding:18px 20px",
+      "margin-bottom:14px",
+      `border-left:3px solid ${accentColor}`,
+    ].join(";");
+    card.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">
+        <span style="font-size:16px;">${icon}</span>${title}
+      </div>
+      <div style="font-size:13.5px;color:var(--text);line-height:1.75;">${content}</div>`;
     return card;
   }
+
+  // Card 1 — From the paper
   panel.appendChild(makeCard("📄", "From This Paper", from_paper, "var(--accent)"));
+
+  // Card 2 — Simple explanation
   panel.appendChild(makeCard("💡", "In Simple Words", simple_explanation, "var(--green)"));
+
+  // Card 3 — Real-world example (new!)
+  if (real_world_example) {
+    const exCard = document.createElement("div");
+    exCard.style.cssText = [
+      "background:var(--amber-soft)",
+      "border:1px solid var(--amber)",
+      "border-radius:var(--radius-lg)",
+      "padding:18px 20px",
+      "margin-bottom:14px",
+      "border-left:3px solid var(--amber)",
+    ].join(";");
+
+    // Strip "Example:" prefix if Gemini included it, so we can render it ourselves
+    const exText = real_world_example.replace(/^example\s*:\s*/i, "").trim();
+
+    exCard.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--amber);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">
+        <span style="font-size:16px;">🌍</span>Real-World Example
+      </div>
+      <div style="display:flex;gap:10px;align-items:flex-start;">
+        <span style="font-size:24px;line-height:1;flex-shrink:0;margin-top:2px;">💬</span>
+        <div style="font-size:13.5px;color:var(--text);line-height:1.75;font-style:italic;">"${exText}"</div>
+      </div>`;
+    panel.appendChild(exCard);
+  }
+
+  // ── "Search again" hint ──
+  const hint = document.createElement("div");
+  hint.style.cssText = "font-size:11px;color:var(--text3);margin-top:4px;text-align:center;";
+  hint.textContent   = "Type another term above and click Explain to look it up.";
+  panel.appendChild(hint);
 }
 
 function handleExplainKey(event) {
@@ -473,7 +776,7 @@ function renderComparisonComingSoon() {
   panel.appendChild(makeComingSoonBox("⚖️", "Comparison — Coming Soon", "Multi-paper comparison is in development.", "In Development"));
 }
 
-/* ── Tab switching  ── FIXED: cache check happens FIRST, no flicker ─────── */
+/* ── Tab switching ────────────────────────────────────────────────────────── */
 
 function switchTab(name) {
   const validTabs = ["chat", "summary", "insights", "prerequisites", "explain", "comparison"];
@@ -494,24 +797,20 @@ function switchTab(name) {
 
     const paperId = getPaperId(paper);
 
-    // 1. Return cached instantly — NO loading flash
     const cached = getCachedTab(paperId, "insights");
     if (cached) { renderInsights(cached); return; }
 
-    // 2. Paper already has analysis from a previous session's paper object
     if (paper.analysis && paper.analysis.final_score) {
       setCachedTab(paperId, "insights", paper);
       renderInsights(paper);
       return;
     }
 
-    // 3. Still indexing
     if ((paper.indexStatus || "ready") === "indexing") {
       if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Indexing in progress...", "Wait for the green dot, then click Insights again.")); }
       return;
     }
 
-    // 4. Need to fetch — show loading only now
     if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Analyzing paper...", "Running difficulty analysis via Gemini. This runs once and is cached forever after.")); }
 
     fetchJson("/api/analyze", { method: "POST", body: JSON.stringify({ paper_path: getPaperPath(paper) }) })
@@ -540,17 +839,14 @@ function switchTab(name) {
 
     const paperId = getPaperId(paper);
 
-    // 1. Return cached instantly — NO loading flash
     const cached = getCachedTab(paperId, "prerequisites");
     if (cached) { renderPrerequisites(cached); return; }
 
-    // 2. Still indexing
     if ((paper.indexStatus || "ready") === "indexing") {
       if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Indexing in progress...", "Wait for the green dot, then click Prerequisites again.")); }
       return;
     }
 
-    // 3. Need to fetch — show loading only now
     if (panel) { clearElement(panel); panel.appendChild(makeComingSoonBox("⏳", "Extracting Prerequisites...", "Gemini is building a learning roadmap. This runs once and is cached forever after.")); }
 
     fetchJson("/api/prerequisites", { method: "POST", body: JSON.stringify({ paper_path: getPaperPath(paper) }) })
@@ -564,6 +860,9 @@ function switchTab(name) {
       });
     return;
   }
+
+  /* ── EXPLAIN — just switch, don't clear existing results ─────────────── */
+  // (content stays from previous search or from a prerequisite click)
 }
 
 /* ── Paper loading ────────────────────────────────────────────────────────── */
@@ -796,11 +1095,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 /* ── Global exposure ──────────────────────────────────────────────────────── */
-window.toggleDark       = toggleDark;
-window.switchTab        = switchTab;
-window.handleKey        = handleKey;
-window.sendMessage      = sendMessage;
-window.changePage       = changePage;
-window.explainTerm      = explainTerm;
-window.handleExplainKey = handleExplainKey;
-window.logout           = logout;
+window.toggleDark          = toggleDark;
+window.switchTab           = switchTab;
+window.handleKey           = handleKey;
+window.sendMessage         = sendMessage;
+window.changePage          = changePage;
+window.explainTerm         = explainTerm;
+window.handleExplainKey    = handleExplainKey;
+window.logout              = logout;
+window.explainPrerequisite = explainPrerequisite;
