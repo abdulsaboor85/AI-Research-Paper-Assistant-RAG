@@ -64,6 +64,9 @@ _analysis_lock   = threading.Lock()
 _prereq_cache:   dict[str, str]  = {}
 _prereq_lock     = threading.Lock()
 
+_chat_cache:     dict[str, list] = {}
+_chat_lock       = threading.Lock()
+
 
 def _default_status() -> dict:
     return {"status": "ready", "step": "", "pct": 100, "message": ""}
@@ -146,6 +149,65 @@ def set_cached_prereqs(collection_name: str, result: str) -> None:
             print(f"[cache] Saved prereqs to disk for {collection_name}")
         except Exception as e:
             print(f"[cache] Failed to write prereqs cache: {e}")
+
+
+# =========================================================
+# CHAT HISTORY  (disk-persistent, per paper/collection)
+# =========================================================
+
+def get_cached_chat(collection_name: str) -> list:
+    """Returns the stored chat history list for a paper, or [] if none."""
+    with _chat_lock:
+        if collection_name in _chat_cache:
+            return _chat_cache[collection_name]
+        path = _cache_file_path(collection_name, "chat")
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                _chat_cache[collection_name] = data
+                print(f"[cache] Loaded chat history from disk for {collection_name}")
+                return data
+            except Exception as e:
+                print(f"[cache] Failed to read chat cache: {e}")
+        _chat_cache[collection_name] = []
+        return []
+
+
+def append_chat_messages(collection_name: str, user_text: str, reply_text: str) -> None:
+    """Appends a user+assistant pair to the chat history and writes it to disk."""
+    with _chat_lock:
+        history = _chat_cache.get(collection_name)
+        if history is None:
+            path = _cache_file_path(collection_name, "chat")
+            if path.exists():
+                try:
+                    history = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    history = []
+            else:
+                history = []
+
+        history.append({"role": "user", "text": user_text})
+        history.append({"role": "assistant", "text": reply_text})
+        _chat_cache[collection_name] = history
+
+        path = _cache_file_path(collection_name, "chat")
+        try:
+            path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"[cache] Saved chat history to disk for {collection_name}")
+        except Exception as e:
+            print(f"[cache] Failed to write chat cache: {e}")
+
+
+def clear_cached_chat(collection_name: str) -> None:
+    with _chat_lock:
+        _chat_cache[collection_name] = []
+        path = _cache_file_path(collection_name, "chat")
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception as e:
+            print(f"[cache] Failed to delete chat cache: {e}")
 
 
 # =========================================================
@@ -463,7 +525,45 @@ def api_chat() -> Any:
 
         chunks = retrieve_relevant_chunks(question, collection_name=collection_name)
         reply  = answer_question(question, chunks)
+
+        # Persist this exchange so it survives page refresh / server restart.
+        append_chat_messages(collection_name, question, reply)
+
         return jsonify({"reply": reply, "collectionName": collection_name, "chunksUsed": len(chunks)})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+# =========================================================
+# API — CHAT HISTORY  (load saved history for a paper)
+# =========================================================
+
+@app.get("/api/chat-history/<path:paper_path>")
+def api_chat_history(paper_path: str) -> Any:
+    if "user_id" not in session:
+        return jsonify({"error": "Not logged in."}), 401
+    try:
+        pdf_path        = normalize_pdf_path(paper_path)
+        collection_name = collection_name_from_path(pdf_path)
+        history         = get_cached_chat(collection_name)
+        return jsonify({"history": history, "collectionName": collection_name})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
+@app.post("/api/chat-history/clear")
+def api_chat_history_clear() -> Any:
+    if "user_id" not in session:
+        return jsonify({"error": "Not logged in."}), 401
+    data = request.get_json(silent=True) or {}
+    raw_path = (data.get("paper_path") or data.get("path") or data.get("paperId"))
+    if not raw_path:
+        return jsonify({"error": "paper_path is required."}), 400
+    try:
+        pdf_path        = normalize_pdf_path(str(raw_path))
+        collection_name = collection_name_from_path(pdf_path)
+        clear_cached_chat(collection_name)
+        return jsonify({"cleared": True})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 400
 

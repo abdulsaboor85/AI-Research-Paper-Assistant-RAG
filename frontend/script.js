@@ -16,6 +16,7 @@ const state = {
   _explainCache:  {},   // "paperId::term_lowercase" -> explain result dict
   _pollingTimers: {},   // collectionName -> intervalId
   _chatHistory:   {},   // paperId -> [{ role: "user"|"assistant", text: string }]
+  _chatLoaded:    {},   // paperId -> true once history has been fetched from server
 };
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
@@ -89,7 +90,7 @@ function setCachedTab(paperId, tabName, data) {
   state._tabCache[paperId][tabName] = data;
 }
 
-/* ── Chat history (per paper) ────────────────────────────────────────────── */
+/* ── Chat history (per paper, backed by server disk cache) ──────────────── */
 
 function getChatHistory(paperId) {
   if (!state._chatHistory[paperId]) state._chatHistory[paperId] = [];
@@ -101,15 +102,13 @@ function pushChatMessage(paperId, role, text) {
 }
 
 /**
- * Rebuilds the #chatArea DOM from the stored history of the given paper.
- * Called whenever the active paper changes so chats never bleed between papers.
+ * Rebuilds the #chatArea DOM from the in-memory history of the given paper.
  */
 function renderChatHistory(paperId) {
   const chatArea = document.getElementById("chatArea");
   const thinkEl  = document.getElementById("thinkingMsg");
   if (!chatArea || !thinkEl) return;
 
-  // Remove every message node but keep the thinking indicator element itself
   Array.from(chatArea.children).forEach(child => {
     if (child !== thinkEl) chatArea.removeChild(child);
   });
@@ -144,6 +143,33 @@ function renderChatHistory(paperId) {
   });
 
   chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+/**
+ * Loads chat history for a paper from the server (if not already loaded),
+ * stores it locally, then renders it. This is what makes chat survive
+ * page refreshes and server restarts.
+ */
+async function loadAndRenderChatHistory(paper) {
+  if (!paper) { renderChatHistory(null); return; }
+  const paperId = getPaperId(paper);
+
+  if (state._chatLoaded[paperId]) {
+    renderChatHistory(paperId);
+    return;
+  }
+
+  // Show nothing while fetching (usually instant — it's a small JSON file)
+  renderChatHistory(null);
+
+  try {
+    const data = await fetchJson(`/api/chat-history/${getPaperPath(paper)}`, { method: "GET" });
+    state._chatHistory[paperId] = Array.isArray(data.history) ? data.history : [];
+  } catch {
+    state._chatHistory[paperId] = [];
+  }
+  state._chatLoaded[paperId] = true;
+  renderChatHistory(paperId);
 }
 
 /* ── Progress bar ─────────────────────────────────────────────────────────── */
@@ -390,25 +416,17 @@ function renderInsights(paper) {
 
 /* ── PREREQUISITES TAB ────────────────────────────────────────────────────── */
 
-/**
- * Called when a prerequisite card is clicked.
- * Switches to the Explain tab and auto-searches the clicked concept.
- */
 function explainPrerequisite(concept) {
-  // Switch to the explain tab
   switchTab("explain");
 
-  // Wait a tick for the panel to become visible, then fill the input and trigger
   setTimeout(() => {
     const input = document.getElementById("explainInput");
     if (input) {
       input.value = concept;
-      // Trigger a brief highlight animation on the input
       input.style.transition = "box-shadow 0.3s";
       input.style.boxShadow  = "0 0 0 3px rgba(45, 91, 227, 0.35)";
       setTimeout(() => { input.style.boxShadow = ""; }, 1200);
     }
-    // Auto-run the explanation
     void explainTerm();
   }, 80);
 }
@@ -457,7 +475,6 @@ function renderPrerequisites(text) {
     const card          = document.createElement("div");
     const progressColor = idx < items.length * 0.33 ? "var(--green)" : idx < items.length * 0.66 ? "var(--amber)" : "var(--red)";
 
-    // Make card look clickable
     card.style.cssText  = [
       `background:var(--surface)`,
       `border:1px solid var(--border)`,
@@ -472,7 +489,6 @@ function renderPrerequisites(text) {
       `transition:background 0.15s, box-shadow 0.15s, transform 0.1s`,
     ].join(";");
 
-    // Hover effects via JS (keeps CSS vars working)
     card.addEventListener("mouseenter", () => {
       card.style.background  = "var(--accent-soft)";
       card.style.boxShadow   = "0 2px 10px rgba(45,91,227,0.12)";
@@ -486,7 +502,6 @@ function renderPrerequisites(text) {
       card.style.borderColor = "";
     });
 
-    // Click → jump to Explain tab
     card.addEventListener("click", () => {
       explainPrerequisite(item.concept);
     });
@@ -505,7 +520,6 @@ function renderPrerequisites(text) {
     conceptEl.style.cssText = "font-size:13px;font-weight:600;color:var(--text);margin-bottom:3px;";
     conceptEl.textContent   = item.concept;
 
-    // Small "explain" chip hint
     const chip = document.createElement("span");
     chip.style.cssText = [
       "font-size:10px",
@@ -554,8 +568,6 @@ function renderPrerequisites(text) {
 
 /* ── EXPLAIN TAB ──────────────────────────────────────────────────────────── */
 
-/* ── Explain cache helpers ────────────────────────────────────────────────── */
-
 function _explainCacheKey(paperId, term) {
   return `${paperId}::${term.toLowerCase().trim()}`;
 }
@@ -568,20 +580,16 @@ function setExplainCache(paperId, term, data) {
   state._explainCache[_explainCacheKey(paperId, term)] = data;
 }
 
-/* ── Explain loading card — one-shot progress bar, no loop ────────────────── */
-
-// Each step: [targetPct, label, delay_ms_to_reach_it]
 const _EXPLAIN_STEPS = [
   [15,  "Retrieving relevant sections from paper…",  400],
   [35,  "Sending context to Gemini…",                1200],
   [55,  "Gemini is reading the paper…",              3000],
   [75,  "Generating explanation…",                   6000],
   [90,  "Preparing your answer…",                    10000],
-  [95,  "Waiting for Gemini response…",              0],   // stays here until done
+  [95,  "Waiting for Gemini response…",              0],
 ];
 
 function makeExplainLoadingCard(term) {
-  // Inject styles once
   if (!document.getElementById("explainAnimStyles")) {
     const style = document.createElement("style");
     style.id = "explainAnimStyles";
@@ -637,10 +645,6 @@ function makeExplainLoadingCard(term) {
   return wrap;
 }
 
-/**
- * Advances the progress bar through fixed steps, then holds at 95%.
- * Returns a stop function — call it when the API responds.
- */
 function startExplainProgress() {
   let currentStep = 0;
   let stopped = false;
@@ -659,14 +663,11 @@ function startExplainProgress() {
     const [pct, label, delay] = _EXPLAIN_STEPS[currentStep];
     setProgress(pct, label);
     currentStep++;
-    // Schedule next step only if there IS a next step and it has a delay
     if (currentStep < _EXPLAIN_STEPS.length - 1 && delay > 0) {
       setTimeout(advance, delay);
     }
-    // Last entry (95%) — just set it and stop scheduling
   }
 
-  // Kick off immediately
   advance();
 
   return function stop() {
@@ -674,8 +675,6 @@ function startExplainProgress() {
     setProgress(100, "Done!");
   };
 }
-
-/* ── explainTerm — with cache + animated loading ──────────────────────────── */
 
 async function explainTerm() {
   const input = document.getElementById("explainInput");
@@ -689,14 +688,12 @@ async function explainTerm() {
 
   const paperId = getPaperId(paper);
 
-  // ── Cache hit — instant return ──
   const cached = getExplainCache(paperId, term);
   if (cached) {
     renderExplainResult(cached);
     return;
   }
 
-  // ── Cache miss — show non-looping progress bar ──
   clearElement(panel);
   panel.appendChild(makeExplainLoadingCard(term));
   const stopProgress = startExplainProgress();
@@ -707,7 +704,7 @@ async function explainTerm() {
       body: JSON.stringify({ term, paper_path: getPaperPath(paper) }),
     });
     stopProgress();
-    setExplainCache(paperId, term, data);   // store for instant re-use
+    setExplainCache(paperId, term, data);
     renderExplainResult(data);
   } catch (error) {
     stopProgress();
@@ -730,7 +727,6 @@ function renderExplainResult(data) {
     found_in_paper,
   } = data;
 
-  // ── Source badge ──
   const badge = document.createElement("div");
   badge.style.cssText = [
     "display:inline-flex",
@@ -750,13 +746,11 @@ function renderExplainResult(data) {
     : "Not in paper — using general knowledge";
   panel.appendChild(badge);
 
-  // ── Term heading ──
   const heading = document.createElement("div");
   heading.style.cssText = "font-size:22px;font-weight:700;color:var(--text);margin-bottom:20px;letter-spacing:-0.3px;";
   heading.textContent   = term.charAt(0).toUpperCase() + term.slice(1);
   panel.appendChild(heading);
 
-  // ── Card builder ──
   function makeCard(icon, title, content, accentColor) {
     const card = document.createElement("div");
     card.style.cssText = [
@@ -775,13 +769,9 @@ function renderExplainResult(data) {
     return card;
   }
 
-  // Card 1 — From the paper
   panel.appendChild(makeCard("📄", "From This Paper", from_paper, "var(--accent)"));
-
-  // Card 2 — Simple explanation
   panel.appendChild(makeCard("💡", "In Simple Words", simple_explanation, "var(--green)"));
 
-  // Card 3 — Real-world example (new!)
   if (real_world_example) {
     const exCard = document.createElement("div");
     exCard.style.cssText = [
@@ -793,7 +783,6 @@ function renderExplainResult(data) {
       "border-left:3px solid var(--amber)",
     ].join(";");
 
-    // Strip "Example:" prefix if Gemini included it, so we can render it ourselves
     const exText = real_world_example.replace(/^example\s*:\s*/i, "").trim();
 
     exCard.innerHTML = `
@@ -807,7 +796,6 @@ function renderExplainResult(data) {
     panel.appendChild(exCard);
   }
 
-  // ── "Search again" hint ──
   const hint = document.createElement("div");
   hint.style.cssText = "font-size:11px;color:var(--text3);margin-top:4px;text-align:center;";
   hint.textContent   = "Type another term above and click Explain to look it up.";
@@ -848,7 +836,6 @@ function switchTab(name) {
 
   const paper = ensureActivePaper();
 
-  /* ── INSIGHTS ─────────────────────────────────────────────────────────── */
   if (name === "insights") {
     const panel   = document.getElementById("insightsContent");
     if (!paper) { renderInsights(null); return; }
@@ -887,7 +874,6 @@ function switchTab(name) {
     return;
   }
 
-  /* ── PREREQUISITES ────────────────────────────────────────────────────── */
   if (name === "prerequisites") {
     const panel = document.getElementById("prerequisitesContent");
     if (!paper) {
@@ -920,7 +906,6 @@ function switchTab(name) {
   }
 
   /* ── EXPLAIN — just switch, don't clear existing results ─────────────── */
-  // (content stays from previous search or from a prerequisite click)
 }
 
 /* ── Paper loading ────────────────────────────────────────────────────────── */
@@ -948,12 +933,12 @@ async function loadPapers() {
 
   renderPapers();
   updatePdfHeader(ensureActivePaper());
-  renderChatHistory(state.activePaperId);   // show this paper's chat (empty on fresh load, since chat isn't persisted server-side)
+  await loadAndRenderChatHistory(ensureActivePaper());   // ← fetch this paper's saved chat from the server
 }
 
 async function selectPaper(paperId) {
   setActivePaper(paperId);
-  renderChatHistory(paperId);   // ← swap the chat window to this paper's own history
+  await loadAndRenderChatHistory(ensureActivePaper());   // ← swap to this paper's saved chat
 
   const activeTab = document.querySelector(".tab.active");
   if (activeTab) {
@@ -993,7 +978,9 @@ async function handleFiles(files) {
 
       renderPapers();
       updatePdfHeader(newPaper);
-      renderChatHistory(state.activePaperId);   // ← fresh paper, fresh (empty) chat window
+      state._chatLoaded[state.activePaperId] = true;   // brand-new paper — no history to fetch
+      state._chatHistory[state.activePaperId] = [];
+      renderChatHistory(state.activePaperId);
       showProgressBar(5, "Starting...");
       showToast(`Uploaded ${file.name} — indexing in background...`);
       startIndexPolling(newPaper);
@@ -1027,7 +1014,7 @@ async function sendMessage() {
   const avatar = document.createElement("div"); avatar.className = "msg-avatar"; avatar.textContent = "U";
   userMsg.appendChild(body); userMsg.appendChild(avatar);
   chatArea.insertBefore(userMsg, thinkEl);
-  pushChatMessage(paperId, "user", message);   // ← store under this paper's id
+  pushChatMessage(paperId, "user", message);   // local copy for instant render
 
   input.value = ""; input.style.height = "auto";
   thinkEl.style.display = "flex"; chatArea.scrollTop = chatArea.scrollHeight;
@@ -1040,8 +1027,8 @@ async function sendMessage() {
     });
     thinkEl.style.display = "none";
 
-    // Only render/store the reply if we're still looking at the SAME paper —
-    // prevents a slow reply for paper A landing in paper B's chat window.
+    // The backend has already persisted both messages to disk (cache/<collection>_chat.json)
+    // by this point, so a refresh from here on will bring this exchange back.
     const replyText = data.reply || "No response returned.";
     pushChatMessage(paperId, "assistant", replyText);
 
@@ -1062,6 +1049,8 @@ async function sendMessage() {
   } catch (error) {
     thinkEl.style.display = "none";
     const errorText = error.message || "Error: Could not get response";
+    // Note: failed requests are NOT persisted server-side (api_chat only saves on success),
+    // so we only keep this in local memory for the current session.
     pushChatMessage(paperId, "assistant", errorText);
 
     if (state.activePaperId === paperId) {
