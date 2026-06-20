@@ -4,3 +4,5 @@ __pycache__/
 chroma_db/
 .env
 pipeline/__pycache__/
+cache/
+chroma_db/

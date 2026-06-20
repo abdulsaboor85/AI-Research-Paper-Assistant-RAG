@@ -15,6 +15,7 @@ const state = {
   _tabCache:      {},   // paperId -> { insights: data, prerequisites: text }
   _explainCache:  {},   // "paperId::term_lowercase" -> explain result dict
   _pollingTimers: {},   // collectionName -> intervalId
+  _chatHistory:   {},   // paperId -> [{ role: "user"|"assistant", text: string }]
 };
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
@@ -86,6 +87,63 @@ function getCachedTab(paperId, tabName) {
 function setCachedTab(paperId, tabName, data) {
   if (!state._tabCache[paperId]) state._tabCache[paperId] = {};
   state._tabCache[paperId][tabName] = data;
+}
+
+/* ── Chat history (per paper) ────────────────────────────────────────────── */
+
+function getChatHistory(paperId) {
+  if (!state._chatHistory[paperId]) state._chatHistory[paperId] = [];
+  return state._chatHistory[paperId];
+}
+
+function pushChatMessage(paperId, role, text) {
+  getChatHistory(paperId).push({ role, text });
+}
+
+/**
+ * Rebuilds the #chatArea DOM from the stored history of the given paper.
+ * Called whenever the active paper changes so chats never bleed between papers.
+ */
+function renderChatHistory(paperId) {
+  const chatArea = document.getElementById("chatArea");
+  const thinkEl  = document.getElementById("thinkingMsg");
+  if (!chatArea || !thinkEl) return;
+
+  // Remove every message node but keep the thinking indicator element itself
+  Array.from(chatArea.children).forEach(child => {
+    if (child !== thinkEl) chatArea.removeChild(child);
+  });
+  thinkEl.style.display = "none";
+
+  const history = paperId ? getChatHistory(paperId) : [];
+
+  history.forEach(({ role, text }) => {
+    if (role === "user") {
+      const userMsg = document.createElement("div"); userMsg.className = "msg user";
+      const body    = document.createElement("div"); body.className   = "msg-body";
+      const bubble  = document.createElement("div"); bubble.className = "msg-bubble";
+      bubble.textContent = text;
+      body.appendChild(bubble);
+      const avatar = document.createElement("div"); avatar.className = "msg-avatar"; avatar.textContent = "U";
+      userMsg.appendChild(body); userMsg.appendChild(avatar);
+      chatArea.insertBefore(userMsg, thinkEl);
+    } else {
+      const aiMsg    = document.createElement("div"); aiMsg.className    = "msg assistant";
+      const aiAvatar = document.createElement("div"); aiAvatar.className = "msg-avatar"; aiAvatar.textContent = "PM";
+      const aiBody   = document.createElement("div"); aiBody.className   = "msg-body";
+      const aiBubble = document.createElement("div"); aiBubble.className = "msg-bubble";
+      aiBubble.textContent = text;
+      const actions  = document.createElement("div"); actions.className = "msg-actions";
+      const copyBtn  = document.createElement("button"); copyBtn.className = "msg-action-btn"; copyBtn.type = "button"; copyBtn.textContent = "Copy";
+      copyBtn.addEventListener("click", () => copyText(text));
+      actions.appendChild(copyBtn);
+      aiBody.appendChild(aiBubble); aiBody.appendChild(actions);
+      aiMsg.appendChild(aiAvatar); aiMsg.appendChild(aiBody);
+      chatArea.insertBefore(aiMsg, thinkEl);
+    }
+  });
+
+  chatArea.scrollTop = chatArea.scrollHeight;
 }
 
 /* ── Progress bar ─────────────────────────────────────────────────────────── */
@@ -890,10 +948,13 @@ async function loadPapers() {
 
   renderPapers();
   updatePdfHeader(ensureActivePaper());
+  renderChatHistory(state.activePaperId);   // show this paper's chat (empty on fresh load, since chat isn't persisted server-side)
 }
 
 async function selectPaper(paperId) {
   setActivePaper(paperId);
+  renderChatHistory(paperId);   // ← swap the chat window to this paper's own history
+
   const activeTab = document.querySelector(".tab.active");
   if (activeTab) {
     const name = activeTab.id.replace("tab-", "");
@@ -932,6 +993,7 @@ async function handleFiles(files) {
 
       renderPapers();
       updatePdfHeader(newPaper);
+      renderChatHistory(state.activePaperId);   // ← fresh paper, fresh (empty) chat window
       showProgressBar(5, "Starting...");
       showToast(`Uploaded ${file.name} — indexing in background...`);
       startIndexPolling(newPaper);
@@ -955,6 +1017,8 @@ async function sendMessage() {
   if (!paper) { showToast("Upload or select a paper first"); return; }
   if ((paper.indexStatus || "ready") === "indexing") { showToast("Paper is still being indexed. Please wait."); return; }
 
+  const paperId = getPaperId(paper);
+
   const userMsg  = document.createElement("div"); userMsg.className  = "msg user";
   const body     = document.createElement("div"); body.className     = "msg-body";
   const bubble   = document.createElement("div"); bubble.className   = "msg-bubble";
@@ -963,6 +1027,8 @@ async function sendMessage() {
   const avatar = document.createElement("div"); avatar.className = "msg-avatar"; avatar.textContent = "U";
   userMsg.appendChild(body); userMsg.appendChild(avatar);
   chatArea.insertBefore(userMsg, thinkEl);
+  pushChatMessage(paperId, "user", message);   // ← store under this paper's id
+
   input.value = ""; input.style.height = "auto";
   thinkEl.style.display = "flex"; chatArea.scrollTop = chatArea.scrollHeight;
   state.thinking = true;
@@ -973,27 +1039,40 @@ async function sendMessage() {
       body: JSON.stringify({ message, paper_path: getPaperPath(paper) }),
     });
     thinkEl.style.display = "none";
-    const aiMsg    = document.createElement("div"); aiMsg.className    = "msg assistant";
-    const aiAvatar = document.createElement("div"); aiAvatar.className = "msg-avatar"; aiAvatar.textContent = "PM";
-    const aiBody   = document.createElement("div"); aiBody.className   = "msg-body";
-    const aiBubble = document.createElement("div"); aiBubble.className = "msg-bubble";
-    aiBubble.textContent = data.reply || "No response returned.";
-    const actions  = document.createElement("div"); actions.className = "msg-actions";
-    const copyBtn  = document.createElement("button"); copyBtn.className = "msg-action-btn"; copyBtn.type = "button"; copyBtn.textContent = "Copy";
-    copyBtn.addEventListener("click", () => copyText(data.reply || ""));
-    actions.appendChild(copyBtn);
-    aiBody.appendChild(aiBubble); aiBody.appendChild(actions);
-    aiMsg.appendChild(aiAvatar); aiMsg.appendChild(aiBody);
-    chatArea.insertBefore(aiMsg, thinkEl); chatArea.scrollTop = chatArea.scrollHeight;
+
+    // Only render/store the reply if we're still looking at the SAME paper —
+    // prevents a slow reply for paper A landing in paper B's chat window.
+    const replyText = data.reply || "No response returned.";
+    pushChatMessage(paperId, "assistant", replyText);
+
+    if (state.activePaperId === paperId) {
+      const aiMsg    = document.createElement("div"); aiMsg.className    = "msg assistant";
+      const aiAvatar = document.createElement("div"); aiAvatar.className = "msg-avatar"; aiAvatar.textContent = "PM";
+      const aiBody   = document.createElement("div"); aiBody.className   = "msg-body";
+      const aiBubble = document.createElement("div"); aiBubble.className = "msg-bubble";
+      aiBubble.textContent = replyText;
+      const actions  = document.createElement("div"); actions.className = "msg-actions";
+      const copyBtn  = document.createElement("button"); copyBtn.className = "msg-action-btn"; copyBtn.type = "button"; copyBtn.textContent = "Copy";
+      copyBtn.addEventListener("click", () => copyText(replyText));
+      actions.appendChild(copyBtn);
+      aiBody.appendChild(aiBubble); aiBody.appendChild(actions);
+      aiMsg.appendChild(aiAvatar); aiMsg.appendChild(aiBody);
+      chatArea.insertBefore(aiMsg, thinkEl); chatArea.scrollTop = chatArea.scrollHeight;
+    }
   } catch (error) {
     thinkEl.style.display = "none";
-    const aiMsg    = document.createElement("div"); aiMsg.className    = "msg assistant";
-    const aiAvatar = document.createElement("div"); aiAvatar.className = "msg-avatar"; aiAvatar.textContent = "PM";
-    const aiBody   = document.createElement("div"); aiBody.className   = "msg-body";
-    const aiBubble = document.createElement("div"); aiBubble.className = "msg-bubble";
-    aiBubble.textContent = error.message || "Error: Could not get response";
-    aiBody.appendChild(aiBubble); aiMsg.appendChild(aiAvatar); aiMsg.appendChild(aiBody);
-    chatArea.insertBefore(aiMsg, thinkEl); chatArea.scrollTop = chatArea.scrollHeight;
+    const errorText = error.message || "Error: Could not get response";
+    pushChatMessage(paperId, "assistant", errorText);
+
+    if (state.activePaperId === paperId) {
+      const aiMsg    = document.createElement("div"); aiMsg.className    = "msg assistant";
+      const aiAvatar = document.createElement("div"); aiAvatar.className = "msg-avatar"; aiAvatar.textContent = "PM";
+      const aiBody   = document.createElement("div"); aiBody.className   = "msg-body";
+      const aiBubble = document.createElement("div"); aiBubble.className = "msg-bubble";
+      aiBubble.textContent = errorText;
+      aiBody.appendChild(aiBubble); aiMsg.appendChild(aiAvatar); aiMsg.appendChild(aiBody);
+      chatArea.insertBefore(aiMsg, thinkEl); chatArea.scrollTop = chatArea.scrollHeight;
+    }
   } finally {
     state.thinking = false;
   }

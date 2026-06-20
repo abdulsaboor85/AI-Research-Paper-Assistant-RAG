@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import secrets
@@ -19,8 +20,10 @@ BASE_DIR     = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 PAPERS_DIR   = BASE_DIR / "papers"
 UPLOAD_DIR   = PAPERS_DIR / "uploads"
+CACHE_DIR    = BASE_DIR / "cache"
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 load_dotenv(BASE_DIR / ".env")
 
@@ -44,8 +47,6 @@ app.register_blueprint(auth_bp)
 # =========================================================
 # PRE-LOAD HEAVY MODELS AT STARTUP
 # =========================================================
-# Import embedder NOW so SentenceTransformer loads once at startup,
-# not on the first request (which makes the first request very slow).
 print("[startup] Pre-loading embedding model...")
 from embedder import model as _embed_model, client as _chroma_client
 print("[startup] Embedding model ready.")
@@ -78,21 +79,73 @@ def get_index_status(collection_name: str) -> dict:
     with _index_lock:
         return _index_status.get(collection_name, _default_status())
 
+
+# =========================================================
+# DISK-PERSISTENT CACHE HELPERS
+# =========================================================
+
+def _cache_file_path(collection_name: str, cache_type: str) -> Path:
+    """Generate a safe file path for a given collection + cache type."""
+    safe = re.sub(r"[^a-z0-9_]", "", collection_name.lower())
+    return CACHE_DIR / f"{safe}_{cache_type}.json"
+
+
 def get_cached_analysis(collection_name: str) -> dict | None:
     with _analysis_lock:
-        return _analysis_cache.get(collection_name)
+        # 1. Check RAM first
+        if collection_name in _analysis_cache:
+            return _analysis_cache[collection_name]
+        # 2. Try disk
+        path = _cache_file_path(collection_name, "analysis")
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                _analysis_cache[collection_name] = data   # warm RAM cache
+                print(f"[cache] Loaded analysis from disk for {collection_name}")
+                return data
+            except Exception as e:
+                print(f"[cache] Failed to read analysis cache: {e}")
+        return None
+
 
 def set_cached_analysis(collection_name: str, result: dict) -> None:
     with _analysis_lock:
         _analysis_cache[collection_name] = result
+        path = _cache_file_path(collection_name, "analysis")
+        try:
+            path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"[cache] Saved analysis to disk for {collection_name}")
+        except Exception as e:
+            print(f"[cache] Failed to write analysis cache: {e}")
+
 
 def get_cached_prereqs(collection_name: str) -> str | None:
     with _prereq_lock:
-        return _prereq_cache.get(collection_name)
+        # 1. Check RAM first
+        if collection_name in _prereq_cache:
+            return _prereq_cache[collection_name]
+        # 2. Try disk
+        path = _cache_file_path(collection_name, "prereqs")
+        if path.exists():
+            try:
+                data = path.read_text(encoding="utf-8")
+                _prereq_cache[collection_name] = data    # warm RAM cache
+                print(f"[cache] Loaded prereqs from disk for {collection_name}")
+                return data
+            except Exception as e:
+                print(f"[cache] Failed to read prereqs cache: {e}")
+        return None
+
 
 def set_cached_prereqs(collection_name: str, result: str) -> None:
     with _prereq_lock:
         _prereq_cache[collection_name] = result
+        path = _cache_file_path(collection_name, "prereqs")
+        try:
+            path.write_text(result, encoding="utf-8")
+            print(f"[cache] Saved prereqs to disk for {collection_name}")
+        except Exception as e:
+            print(f"[cache] Failed to write prereqs cache: {e}")
 
 
 # =========================================================
@@ -128,8 +181,22 @@ def normalize_pdf_path(raw_path: str) -> Path:
 
 
 def collection_name_from_path(pdf_path: Path) -> str:
-    relative = pdf_path.relative_to(BASE_DIR).as_posix().lower()
-    safe     = re.sub(r"[^a-z0-9]+", "_", relative).strip("_")
+    """
+    Generate a stable collection name from the PDF filename.
+
+    FIX: Strips the timestamp prefix (YYYYMMDD_HHMMSS_) before hashing
+    so the same paper uploaded twice gets the SAME collection name,
+    preventing redundant re-embedding.
+
+    Per-user isolation is preserved because the user upload dir
+    is still part of the relative path used here.
+    """
+    # Use the relative path for user isolation, but strip timestamp from stem
+    relative_dir  = pdf_path.parent.relative_to(BASE_DIR).as_posix().lower()
+    stem          = pdf_path.stem.lower()
+    stem          = re.sub(r"^\d{8}_\d{6}_", "", stem)   # strip timestamp prefix
+    combined      = f"{relative_dir}/{stem}"
+    safe          = re.sub(r"[^a-z0-9]+", "_", combined).strip("_")
     return f"paper_{safe or 'default'}"
 
 
@@ -169,8 +236,12 @@ def list_papers() -> list[dict[str, Any]]:
 
 def index_paper_background(pdf_path: Path, collection_name: str) -> None:
     """
-    Background indexing. Uses pre-loaded model singleton - no reload cost.
+    Background indexing. Uses pre-loaded model singleton.
     Steps: extract (0-20%) -> chunk (20-40%) -> embed (40-95%) -> done (100%)
+
+    FIX: collection_exists_and_has_data() now correctly hits the same
+    collection for the same paper (timestamp stripped from name),
+    so re-uploads skip embedding entirely.
     """
     set_index_status(collection_name, "indexing", "Starting...", 5, "Preparing to index")
 
@@ -179,6 +250,12 @@ def index_paper_background(pdf_path: Path, collection_name: str) -> None:
             from chunker  import chunk_text
             from embedder import embed_and_store, collection_exists_and_has_data
             from extractor import extract_text
+
+            # If already indexed (same paper uploaded before), skip everything
+            if collection_exists_and_has_data(collection_name):
+                set_index_status(collection_name, "ready", "Done", 100, "Ready (cached)")
+                print(f"[indexer] {collection_name} already indexed - skipping embed.")
+                return
 
             set_index_status(collection_name, "indexing", "Extracting text", 15, "Reading PDF text...")
             full_text = extract_text(str(pdf_path))
@@ -190,11 +267,8 @@ def index_paper_background(pdf_path: Path, collection_name: str) -> None:
             if not chunks:
                 raise ValueError("Chunking produced no chunks.")
 
-            if collection_exists_and_has_data(collection_name):
-                set_index_status(collection_name, "indexing", "Already indexed", 90, "Using cached embeddings...")
-            else:
-                set_index_status(collection_name, "indexing", "Embedding", 55, f"Embedding {len(chunks)} chunks...")
-                embed_and_store(chunks, collection_name=collection_name, force=False)
+            set_index_status(collection_name, "indexing", "Embedding", 55, f"Embedding {len(chunks)} chunks...")
+            embed_and_store(chunks, collection_name=collection_name, force=False)
 
             set_index_status(collection_name, "ready", "Done", 100, "Ready")
             print(f"[indexer] {collection_name} ready.")
@@ -496,5 +570,5 @@ if __name__ == "__main__":
         host="127.0.0.1",
         port=5000,
         debug=True,
-        use_reloader=False,   # <-- CRITICAL FIX: keeps background threads alive
+        use_reloader=False,   # <-- CRITICAL: keeps background threads alive
     )
