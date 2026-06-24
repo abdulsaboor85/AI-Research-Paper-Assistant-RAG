@@ -92,8 +92,13 @@ For EVALUATIVE questions:
 
 === OUTPUT FORMAT RULES ===
 - Write in clear, professional, academic English.
-- Do not use markdown formatting or symbols such as **, *, #, or bullet points.
-- Use numbered lists only when presenting multiple distinct findings or sequential steps.
+- Use light markdown to improve readability:
+  - **bold** for key terms, model/method names, and important numbers
+  - numbered lists (1. 2. 3.) for sequential steps or multiple distinct findings
+  - bullet points (- item) for unordered lists of items, features, or comparisons
+  - short paragraphs separated by a blank line — never one giant wall of text
+  - use a heading only if the answer genuinely has 2+ distinct sub-topics (## Heading), otherwise skip headings entirely
+- Do not overuse formatting — a one-line factual answer should just be plain text, no bullets needed.
 - Do not repeat the same information across your answer.
 - Match answer length to complexity: concise for factual questions, thorough for conceptual or evaluative ones.
 - Do not begin your answer with phrases like "Based on the context" or "According to the document."

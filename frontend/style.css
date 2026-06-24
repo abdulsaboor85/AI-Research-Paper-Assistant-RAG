@@ -1046,3 +1046,35 @@ body {
   box-shadow: 0 8px 40px rgba(0,0,0,0.6);
   display: block;
 }
+
+
+/* ═══════════════════════════════════════════════════════════
+   CHAT MESSAGE FORMATTING (markdown-rendered bubbles)
+   ═══════════════════════════════════════════════════════════ */
+.msg-bubble p {
+  margin: 0 0 8px 0;
+}
+.msg-bubble p:last-child {
+  margin-bottom: 0;
+}
+.msg-bubble ul,
+.msg-bubble ol {
+  margin: 4px 0 8px 18px;
+  padding: 0;
+}
+.msg-bubble li {
+  margin-bottom: 4px;
+  line-height: 1.5;
+}
+.msg-bubble li:last-child {
+  margin-bottom: 0;
+}
+.msg-bubble strong {
+  font-weight: 600;
+}
+.msg-bubble .msg-heading {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 4px 0 6px 0;
+  color: inherit;
+}

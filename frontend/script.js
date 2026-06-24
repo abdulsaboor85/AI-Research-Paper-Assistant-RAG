@@ -87,6 +87,76 @@ function showToast(message) {
 
 function clearElement(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
+/* ── Lightweight markdown -> HTML for chat bubbles ───────────────────────── */
+
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function formatMessageText(raw) {
+  if (!raw) return "";
+  const text = escapeHtml(raw.trim());
+  const lines = text.split("\n");
+
+  let html = "";
+  let listBuffer = [];
+  let listType = null; // "ul" | "ol"
+
+  function flushList() {
+    if (!listBuffer.length) return;
+    const tag = listType === "ol" ? "ol" : "ul";
+    html += `<${tag}>` + listBuffer.map(li => `<li>${li}</li>`).join("") + `</${tag}>`;
+    listBuffer = [];
+    listType = null;
+  }
+
+  let paraBuffer = [];
+  function flushPara() {
+    if (!paraBuffer.length) return;
+    html += `<p>${paraBuffer.join("<br>")}</p>`;
+    paraBuffer = [];
+  }
+
+  function inline(s) {
+    // **bold**
+    return s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  }
+
+  for (let line of lines) {
+    const trimmed = line.trim();
+
+    if (!trimmed) { flushList(); flushPara(); continue; }
+
+    const headingMatch = trimmed.match(/^#{1,3}\s+(.*)/);
+    const olMatch       = trimmed.match(/^(\d+)[.)]\s+(.*)/);
+    const ulMatch        = trimmed.match(/^[-*]\s+(.*)/);
+
+    if (headingMatch) {
+      flushList(); flushPara();
+      html += `<h4 class="msg-heading">${inline(headingMatch[1])}</h4>`;
+    } else if (olMatch) {
+      flushPara();
+      if (listType !== "ol") flushList();
+      listType = "ol";
+      listBuffer.push(inline(olMatch[2]));
+    } else if (ulMatch) {
+      flushPara();
+      if (listType !== "ul") flushList();
+      listType = "ul";
+      listBuffer.push(inline(ulMatch[1]));
+    } else {
+      flushList();
+      paraBuffer.push(inline(trimmed));
+    }
+  }
+  flushList(); flushPara();
+
+  return html || `<p>${inline(text)}</p>`;
+}
+
 /* ══════════════════════════════════════════════════════════════════
    PDF VIEWER  — crisp rendering + zoom + fullscreen
 ══════════════════════════════════════════════════════════════════ */
@@ -322,7 +392,7 @@ function renderChatHistory(paperId) {
       const aiAvatar = document.createElement("div"); aiAvatar.className = "msg-avatar"; aiAvatar.textContent = "PM";
       const aiBody   = document.createElement("div"); aiBody.className   = "msg-body";
       const aiBubble = document.createElement("div"); aiBubble.className = "msg-bubble";
-      aiBubble.textContent = text;
+      aiBubble.innerHTML = formatMessageText(text);
       const actions  = document.createElement("div"); actions.className = "msg-actions";
       const copyBtn  = document.createElement("button"); copyBtn.className = "msg-action-btn"; copyBtn.type = "button"; copyBtn.textContent = "Copy";
       copyBtn.addEventListener("click", () => copyText(text));
@@ -1023,7 +1093,7 @@ async function sendMessage() {
       const aiMsg=document.createElement("div"); aiMsg.className="msg assistant";
       const aiAvatar=document.createElement("div"); aiAvatar.className="msg-avatar"; aiAvatar.textContent="PM";
       const aiBody=document.createElement("div"); aiBody.className="msg-body";
-      const aiBubble=document.createElement("div"); aiBubble.className="msg-bubble"; aiBubble.textContent=replyText;
+      const aiBubble=document.createElement("div"); aiBubble.className="msg-bubble"; aiBubble.innerHTML=formatMessageText(replyText);
       const actions=document.createElement("div"); actions.className="msg-actions";
       const copyBtn=document.createElement("button"); copyBtn.className="msg-action-btn"; copyBtn.type="button"; copyBtn.textContent="Copy";
       copyBtn.addEventListener("click",()=>copyText(replyText));
