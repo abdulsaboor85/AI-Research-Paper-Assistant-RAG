@@ -1,4 +1,3 @@
-
 import re
 import time
 import nltk
@@ -21,14 +20,14 @@ print("[DifficultyScorer] KeyBERT ready.")
 DIFFICULTY_LABELS = [(3.5, "Easy"), (6.5, "Medium"), (10.0, "Hard")]
 
 WEIGHTS = {
-    "readability":     0.10,
-    "uncommon_words":  0.10,
-    "technical_terms": 0.10,
-    "llm_perception":  0.70,
+    "readability":     0.20,
+    "uncommon_words":  0.15,
+    "technical_terms": 0.25,
+    "llm_perception":  0.40,
 }
 
 UNCOMMON_FREQ_THRESHOLD = 0.000008
-KEYBERT_TOP_N       = 30
+KEYBERT_TOP_N       = 100
 KEYBERT_NGRAM_RANGE = (1, 2)
 KEYBERT_STOP_WORDS  = "english"
 KEYBERT_DIVERSITY   = 0.7
@@ -63,11 +62,21 @@ def compute_readability_score(text: str) -> tuple:
     return round(fkd * 0.20 + frd * 0.80, 2), round(fk, 2), round(fre, 1)
 
 
-def compute_uncommon_word_score(text: str) -> float:
+def compute_uncommon_word_score(text: str, technical_words: set[str] | None = None) -> float:
+    """
+    Counts uncommon words, excluding technical/domain jargon already
+    captured by the technical-terms component. This avoids double-penalizing
+    the same vocabulary under two different labels.
+    """
+    technical_words = technical_words or set()
     words = [w for w in word_tokenize(text.lower()) if w.isalpha() and len(w) > 2]
     if not words:
         return 5.0
-    unc = sum(1 for w in words if word_frequency(w, "en") < UNCOMMON_FREQ_THRESHOLD)
+    unc = sum(
+        1 for w in words
+        if word_frequency(w, "en") < UNCOMMON_FREQ_THRESHOLD
+        and w not in technical_words
+    )
     return round(min(10.0, (unc / len(words)) * 20.0), 2)
 
 
@@ -100,8 +109,10 @@ def compute_technical_term_score(text: str) -> tuple[float, int, list[str]]:
     return round(min(10.0, (density / 0.20) * 10.0), 2), len(extracted), [kw for kw, _ in extracted]
 
 
-def compute_llm_score(opening_text: str, api_key: str) -> int:
+def compute_llm_score(opening_text: str, api_key: str):
     """ASCII-only prints - no Unicode emoji - safe on Windows cp1252."""
+    from google.genai import types as genai_types
+
     gemini_client = genai.Client(api_key=api_key)
 
     prompt = f"""You are a strict academic difficulty evaluator.
@@ -125,16 +136,39 @@ Paper Opening:
 
 Reply with ONLY a single integer from 1 to 10."""
 
+    scores_collected = []
+
     for model_name in GEMINI_MODEL_POOL:
         for attempt in range(1, MAX_RETRIES_PER_MODEL + 1):
             try:
                 print(f"[LLM] Trying {model_name} (attempt {attempt}/{MAX_RETRIES_PER_MODEL})...")
-                resp  = gemini_client.models.generate_content(model=model_name, contents=prompt)
+                resp = gemini_client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=genai_types.GenerateContentConfig(temperature=0.0),
+                )
                 match = re.search(r'\b(\d+)\b', resp.text.strip())
                 if match:
-                    score = max(1, min(10, int(match.group(1))))
-                    print(f"[LLM] {model_name} -> score: {score}")
-                    return score
+                    first_score = max(1, min(10, int(match.group(1))))
+                    scores_collected.append(first_score)
+                    print(f"[LLM] {model_name} -> score: {first_score}")
+
+                    # Second confirmation call on the same model for stability
+                    try:
+                        resp2 = gemini_client.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                            config=genai_types.GenerateContentConfig(temperature=0.0),
+                        )
+                        match2 = re.search(r'\b(\d+)\b', resp2.text.strip())
+                        if match2:
+                            second_score = max(1, min(10, int(match2.group(1))))
+                            scores_collected.append(second_score)
+                            print(f"[LLM] {model_name} confirmation -> score: {second_score}")
+                    except Exception as e2:
+                        print(f"[LLM] Confirmation call failed, using single score: {e2}")
+
+                    break  # got at least one valid score, stop retrying this model
             except Exception as e:
                 err = str(e)
                 if "429" in err or "quota" in err.lower():
@@ -149,10 +183,18 @@ Reply with ONLY a single integer from 1 to 10."""
                 else:
                     print(f"[LLM] {model_name} error: {e} - next model...")
                     break
+
+        if scores_collected:
+            break  # already have score(s) from this model, no need to try next one
         print(f"[LLM] Moving to next model...")
 
-    print("[LLM] All models failed. Using fallback score 5.")
-    return 5
+    if scores_collected:
+        final_score = round(sum(scores_collected) / len(scores_collected))
+        print(f"[LLM] Final averaged score: {scores_collected} -> {final_score}")
+        return final_score
+
+    print("[LLM] All models failed.")
+    return None
 
 
 def extract_opening_text(full_text: str) -> str:
@@ -176,9 +218,14 @@ def extract_opening_text(full_text: str) -> str:
 def analyze_difficulty(full_text: str, api_key: str) -> dict:
     opening                          = extract_opening_text(full_text)
     r_score, fk_grade, fre_score     = compute_readability_score(full_text)
-    u_score                          = compute_uncommon_word_score(full_text)
-    t_score, kp_count, _             = compute_technical_term_score(full_text)
+    t_score, kp_count, tech_terms    = compute_technical_term_score(full_text)
+    technical_word_set               = {w.lower() for kp in tech_terms for w in kp.split()}
+    u_score                          = compute_uncommon_word_score(full_text, technical_word_set)
     l_score                          = compute_llm_score(opening, api_key)
+
+    if l_score is None:
+        l_score = round((r_score + u_score + t_score) / 3, 1)
+        print(f"[Fallback] LLM unavailable, estimated llm_perception={l_score} from algorithmic scores")
 
     final = round(
         r_score * WEIGHTS["readability"]     +

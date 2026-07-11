@@ -620,12 +620,19 @@ function renderInsights(paper) {
     </svg>`;
   panel.appendChild(hero);
 
+const weights = analysis.weights || {};
+  function fmtWeight(key, fallback) {
+    const w = weights[key];
+    return typeof w === "number" ? `${Math.round(w * 100)}%` : fallback;
+  }
   const components = [
-    { key: "readability",     label: "Readability",     weight: "10%", icon: "📖" },
-    { key: "uncommon_words",  label: "Uncommon Words",  weight: "10%", icon: "🔤" },
-    { key: "technical_terms", label: "Technical Terms", weight: "10%", icon: "🔬" },
-    { key: "llm_perception",  label: "LLM Perception",  weight: "70%", icon: "🤖" },
+    { key: "readability",     label: "Readability",     weight: fmtWeight("readability", "20%"),     icon: "📖" },
+    { key: "uncommon_words",  label: "Uncommon Words",  weight: fmtWeight("uncommon_words", "15%"),  icon: "🔤" },
+    { key: "technical_terms", label: "Technical Terms", weight: fmtWeight("technical_terms", "25%"), icon: "🔬" },
+    { key: "llm_perception",  label: "LLM Perception",  weight: fmtWeight("llm_perception", "40%"),  icon: "🤖" },
   ];
+
+  
   const compCard = document.createElement("div");
   compCard.style.cssText = "background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;margin-bottom:16px;";
   const ct = document.createElement("div");
