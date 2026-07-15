@@ -52,20 +52,11 @@ from embedder import model as _embed_model, client as _chroma_client
 print("[startup] Embedding model ready.")
 
 # =========================================================
-# IN-MEMORY CACHES  (keyed by collection_name)
+# INDEX STATUS  (keyed by collection_name)
 # =========================================================
 
-_index_status:   dict[str, dict] = {}
-_index_lock      = threading.Lock()
-
-_analysis_cache: dict[str, dict] = {}
-_analysis_lock   = threading.Lock()
-
-_prereq_cache:   dict[str, str]  = {}
-_prereq_lock     = threading.Lock()
-
-_chat_cache:     dict[str, list] = {}
-_chat_lock       = threading.Lock()
+_index_status: dict[str, dict] = {}
+_index_lock    = threading.Lock()
 
 
 def _default_status() -> dict:
@@ -84,8 +75,22 @@ def get_index_status(collection_name: str) -> dict:
 
 
 # =========================================================
-# DISK-PERSISTENT CACHE HELPERS
+# GENERIC RAM+DISK CACHE  (used for analysis, prereqs, chat)
 # =========================================================
+# Each cache_type ("analysis", "prereqs", "chat") gets its own
+# RAM dict + lock, but shares the same get/set/delete logic and
+# the same disk file naming convention. This replaces what used
+# to be three near-identical cache implementations.
+
+_CACHE_RAM:   dict[str, dict[str, Any]] = {"analysis": {}, "prereqs": {}, "chat": {}}
+_CACHE_LOCKS: dict[str, threading.Lock] = {
+    "analysis": threading.Lock(),
+    "prereqs":  threading.Lock(),
+    "chat":     threading.Lock(),
+}
+# JSON-encoded caches vs plain-text caches (prereqs is stored as raw text)
+_CACHE_IS_JSON = {"analysis": True, "prereqs": False, "chat": True}
+
 
 def _cache_file_path(collection_name: str, cache_type: str) -> Path:
     """Generate a safe file path for a given collection + cache type."""
@@ -93,121 +98,86 @@ def _cache_file_path(collection_name: str, cache_type: str) -> Path:
     return CACHE_DIR / f"{safe}_{cache_type}.json"
 
 
-def get_cached_analysis(collection_name: str) -> dict | None:
-    with _analysis_lock:
-        # 1. Check RAM first
-        if collection_name in _analysis_cache:
-            return _analysis_cache[collection_name]
-        # 2. Try disk
-        path = _cache_file_path(collection_name, "analysis")
+def _cache_get(cache_type: str, collection_name: str, default: Any = None) -> Any:
+    """Read from RAM first, then disk, warming RAM on a disk hit."""
+    ram   = _CACHE_RAM[cache_type]
+    lock  = _CACHE_LOCKS[cache_type]
+    is_json = _CACHE_IS_JSON[cache_type]
+
+    with lock:
+        if collection_name in ram:
+            return ram[collection_name]
+        path = _cache_file_path(collection_name, cache_type)
         if path.exists():
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                _analysis_cache[collection_name] = data   # warm RAM cache
-                print(f"[cache] Loaded analysis from disk for {collection_name}")
+                raw  = path.read_text(encoding="utf-8")
+                data = json.loads(raw) if is_json else raw
+                ram[collection_name] = data
+                print(f"[cache] Loaded {cache_type} from disk for {collection_name}")
                 return data
             except Exception as e:
-                print(f"[cache] Failed to read analysis cache: {e}")
-        return None
+                print(f"[cache] Failed to read {cache_type} cache: {e}")
+        return default
 
 
-def set_cached_analysis(collection_name: str, result: dict) -> None:
-    with _analysis_lock:
-        _analysis_cache[collection_name] = result
-        path = _cache_file_path(collection_name, "analysis")
+def _cache_set(cache_type: str, collection_name: str, value: Any) -> None:
+    """Write to RAM and persist to disk."""
+    ram   = _CACHE_RAM[cache_type]
+    lock  = _CACHE_LOCKS[cache_type]
+    is_json = _CACHE_IS_JSON[cache_type]
+
+    with lock:
+        ram[collection_name] = value
+        path = _cache_file_path(collection_name, cache_type)
         try:
-            path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"[cache] Saved analysis to disk for {collection_name}")
+            text = json.dumps(value, ensure_ascii=False, indent=2) if is_json else value
+            path.write_text(text, encoding="utf-8")
+            print(f"[cache] Saved {cache_type} to disk for {collection_name}")
         except Exception as e:
-            print(f"[cache] Failed to write analysis cache: {e}")
+            print(f"[cache] Failed to write {cache_type} cache: {e}")
 
 
-def get_cached_prereqs(collection_name: str) -> str | None:
-    with _prereq_lock:
-        # 1. Check RAM first
-        if collection_name in _prereq_cache:
-            return _prereq_cache[collection_name]
-        # 2. Try disk
-        path = _cache_file_path(collection_name, "prereqs")
-        if path.exists():
-            try:
-                data = path.read_text(encoding="utf-8")
-                _prereq_cache[collection_name] = data    # warm RAM cache
-                print(f"[cache] Loaded prereqs from disk for {collection_name}")
-                return data
-            except Exception as e:
-                print(f"[cache] Failed to read prereqs cache: {e}")
-        return None
+def _cache_delete(cache_type: str, collection_name: str) -> None:
+    """Clear both RAM and disk copies for a cache entry."""
+    ram  = _CACHE_RAM[cache_type]
+    lock = _CACHE_LOCKS[cache_type]
 
-
-def set_cached_prereqs(collection_name: str, result: str) -> None:
-    with _prereq_lock:
-        _prereq_cache[collection_name] = result
-        path = _cache_file_path(collection_name, "prereqs")
-        try:
-            path.write_text(result, encoding="utf-8")
-            print(f"[cache] Saved prereqs to disk for {collection_name}")
-        except Exception as e:
-            print(f"[cache] Failed to write prereqs cache: {e}")
-
-
-# =========================================================
-# CHAT HISTORY  (disk-persistent, per paper/collection)
-# =========================================================
-
-def get_cached_chat(collection_name: str) -> list:
-    """Returns the stored chat history list for a paper, or [] if none."""
-    with _chat_lock:
-        if collection_name in _chat_cache:
-            return _chat_cache[collection_name]
-        path = _cache_file_path(collection_name, "chat")
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                _chat_cache[collection_name] = data
-                print(f"[cache] Loaded chat history from disk for {collection_name}")
-                return data
-            except Exception as e:
-                print(f"[cache] Failed to read chat cache: {e}")
-        _chat_cache[collection_name] = []
-        return []
-
-
-def append_chat_messages(collection_name: str, user_text: str, reply_text: str) -> None:
-    """Appends a user+assistant pair to the chat history and writes it to disk."""
-    with _chat_lock:
-        history = _chat_cache.get(collection_name)
-        if history is None:
-            path = _cache_file_path(collection_name, "chat")
-            if path.exists():
-                try:
-                    history = json.loads(path.read_text(encoding="utf-8"))
-                except Exception:
-                    history = []
-            else:
-                history = []
-
-        history.append({"role": "user", "text": user_text})
-        history.append({"role": "assistant", "text": reply_text})
-        _chat_cache[collection_name] = history
-
-        path = _cache_file_path(collection_name, "chat")
-        try:
-            path.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"[cache] Saved chat history to disk for {collection_name}")
-        except Exception as e:
-            print(f"[cache] Failed to write chat cache: {e}")
-
-
-def clear_cached_chat(collection_name: str) -> None:
-    with _chat_lock:
-        _chat_cache[collection_name] = []
-        path = _cache_file_path(collection_name, "chat")
+    with lock:
+        ram.pop(collection_name, None)
+        path = _cache_file_path(collection_name, cache_type)
         try:
             if path.exists():
                 path.unlink()
         except Exception as e:
-            print(f"[cache] Failed to delete chat cache: {e}")
+            print(f"[cache] Failed to delete {cache_type} cache: {e}")
+
+
+# ── Thin wrappers so call sites stay readable ────────────────────
+
+def get_cached_analysis(collection_name: str) -> dict | None:
+    return _cache_get("analysis", collection_name, default=None)
+
+def set_cached_analysis(collection_name: str, result: dict) -> None:
+    _cache_set("analysis", collection_name, result)
+
+def get_cached_prereqs(collection_name: str) -> str | None:
+    return _cache_get("prereqs", collection_name, default=None)
+
+def set_cached_prereqs(collection_name: str, result: str) -> None:
+    _cache_set("prereqs", collection_name, result)
+
+def get_cached_chat(collection_name: str) -> list:
+    return _cache_get("chat", collection_name, default=[])
+
+def append_chat_messages(collection_name: str, user_text: str, reply_text: str) -> None:
+    history = get_cached_chat(collection_name)
+    history = list(history) if history else []
+    history.append({"role": "user", "text": user_text})
+    history.append({"role": "assistant", "text": reply_text})
+    _cache_set("chat", collection_name, history)
+
+def clear_cached_chat(collection_name: str) -> None:
+    _cache_delete("chat", collection_name)
 
 
 # =========================================================
@@ -253,7 +223,6 @@ def collection_name_from_path(pdf_path: Path) -> str:
     Per-user isolation is preserved because the user upload dir
     is still part of the relative path used here.
     """
-    # Use the relative path for user isolation, but strip timestamp from stem
     relative_dir  = pdf_path.parent.relative_to(BASE_DIR).as_posix().lower()
     stem          = pdf_path.stem.lower()
     stem          = re.sub(r"^\d{8}_\d{6}_", "", stem)   # strip timestamp prefix
@@ -313,7 +282,6 @@ def index_paper_background(pdf_path: Path, collection_name: str) -> None:
             from embedder import embed_and_store, collection_exists_and_has_data
             from extractor import extract_text
 
-            # If already indexed (same paper uploaded before), skip everything
             if collection_exists_and_has_data(collection_name):
                 set_index_status(collection_name, "ready", "Done", 100, "Ready (cached)")
                 print(f"[indexer] {collection_name} already indexed - skipping embed.")
@@ -526,7 +494,6 @@ def api_chat() -> Any:
         chunks = retrieve_relevant_chunks(question, collection_name=collection_name)
         reply  = answer_question(question, chunks)
 
-        # Persist this exchange so it survives page refresh / server restart.
         append_chat_messages(collection_name, question, reply)
 
         return jsonify({"reply": reply, "collectionName": collection_name, "chunksUsed": len(chunks)})

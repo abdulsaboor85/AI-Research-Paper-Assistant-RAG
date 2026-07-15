@@ -438,8 +438,3 @@ body.dark .field-input:focus {
 .switch-hint a:hover {
   text-decoration: underline;
 }
-
-.paper-dot.error {
-  background: var(--red);
-}
- 

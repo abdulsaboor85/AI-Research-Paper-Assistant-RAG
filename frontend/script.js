@@ -121,7 +121,6 @@ function formatMessageText(raw) {
   }
 
   function inline(s) {
-    // **bold**
     return s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   }
 
@@ -157,34 +156,51 @@ function formatMessageText(raw) {
   return html || `<p>${inline(text)}</p>`;
 }
 
+/* ── Chat message DOM builder (shared by history render + live send) ──────── */
+
+function createMessageElement(role, text) {
+  if (role === "user") {
+    const userMsg = document.createElement("div"); userMsg.className = "msg user";
+    const body    = document.createElement("div"); body.className   = "msg-body";
+    const bubble  = document.createElement("div"); bubble.className = "msg-bubble";
+    bubble.textContent = text;
+    body.appendChild(bubble);
+    const avatar = document.createElement("div"); avatar.className = "msg-avatar"; avatar.textContent = "U";
+    userMsg.appendChild(body); userMsg.appendChild(avatar);
+    return userMsg;
+  }
+
+  const aiMsg    = document.createElement("div"); aiMsg.className    = "msg assistant";
+  const aiAvatar = document.createElement("div"); aiAvatar.className = "msg-avatar"; aiAvatar.textContent = "PM";
+  const aiBody   = document.createElement("div"); aiBody.className   = "msg-body";
+  const aiBubble = document.createElement("div"); aiBubble.className = "msg-bubble";
+  aiBubble.innerHTML = formatMessageText(text);
+  const actions  = document.createElement("div"); actions.className = "msg-actions";
+  const copyBtn  = document.createElement("button"); copyBtn.className = "msg-action-btn"; copyBtn.type = "button"; copyBtn.textContent = "Copy";
+  copyBtn.addEventListener("click", () => copyText(text));
+  actions.appendChild(copyBtn);
+  aiBody.appendChild(aiBubble); aiBody.appendChild(actions);
+  aiMsg.appendChild(aiAvatar); aiMsg.appendChild(aiBody);
+  return aiMsg;
+}
+
 /* ══════════════════════════════════════════════════════════════════
    PDF VIEWER  — crisp rendering + zoom + fullscreen
 ══════════════════════════════════════════════════════════════════ */
 
-/**
- * Renders one page of _pdfDoc onto a NEW canvas at high DPI and
- * appends/replaces it inside `container`.
- *
- * @param {number} pageNum   1-based page number
- * @param {HTMLElement} container  element to put the canvas in
- * @param {number} targetWidth  CSS width in px we want to fill
- * @param {number} zoom      extra zoom multiplier on top of fit-width scale
- * @param {Function} [onDone]  called with canvas when render completes
- */
 async function renderPageInto(pageNum, container, targetWidth, zoom, onDone) {
   const page = await _pdfDoc.getPage(pageNum);
 
-  const dpr       = window.devicePixelRatio || 1;          // e.g. 2 on Retina
+  const dpr       = window.devicePixelRatio || 1;
   const baseVP    = page.getViewport({ scale: 1 });
-  const fitScale  = targetWidth / baseVP.width;            // scale to fill container
-  const finalScale = fitScale * zoom * dpr;                // multiply by DPR for crispness
+  const fitScale  = targetWidth / baseVP.width;
+  const finalScale = fitScale * zoom * dpr;
 
   const viewport = page.getViewport({ scale: finalScale });
 
   const canvas        = document.createElement("canvas");
   canvas.width        = viewport.width;
   canvas.height       = viewport.height;
-  // CSS size = actual pixels / dpr  → looks sharp on HiDPI
   canvas.style.width  = `${viewport.width  / dpr}px`;
   canvas.style.height = `${viewport.height / dpr}px`;
   canvas.style.display = "block";
@@ -248,7 +264,6 @@ async function renderSidebarPage(pageNum) {
   const pdfBody = document.getElementById("pdfBody");
   if (!_pdfDoc || !pdfBody) return;
 
-  // measure available width (subtract scrollbar / padding)
   const available = (pdfBody.clientWidth || 320) - 16;
 
   pdfBody.style.cssText = "overflow-y:auto;padding:8px;display:flex;justify-content:center;align-items:flex-start;";
@@ -299,7 +314,6 @@ async function openPdfFullscreen() {
 
   await renderFullscreenPage(_pdfFsPage);
 
-  // close on Escape
   document.addEventListener("keydown", handleFsKey);
 }
 
@@ -320,7 +334,6 @@ async function renderFullscreenPage(pageNum) {
   const body = document.getElementById("pdfFullscreenBody");
   if (!_pdfDoc || !body) return;
 
-  // use 90 % of the viewport width so it looks great on any monitor
   const targetW = Math.floor(window.innerWidth * 0.90);
 
   await renderPageInto(pageNum, body, targetW, _pdfFsZoom, () => {
@@ -378,29 +391,7 @@ function renderChatHistory(paperId) {
   const history = paperId ? getChatHistory(paperId) : [];
 
   history.forEach(({ role, text }) => {
-    if (role === "user") {
-      const userMsg = document.createElement("div"); userMsg.className = "msg user";
-      const body    = document.createElement("div"); body.className   = "msg-body";
-      const bubble  = document.createElement("div"); bubble.className = "msg-bubble";
-      bubble.textContent = text;
-      body.appendChild(bubble);
-      const avatar = document.createElement("div"); avatar.className = "msg-avatar"; avatar.textContent = "U";
-      userMsg.appendChild(body); userMsg.appendChild(avatar);
-      chatArea.insertBefore(userMsg, thinkEl);
-    } else {
-      const aiMsg    = document.createElement("div"); aiMsg.className    = "msg assistant";
-      const aiAvatar = document.createElement("div"); aiAvatar.className = "msg-avatar"; aiAvatar.textContent = "PM";
-      const aiBody   = document.createElement("div"); aiBody.className   = "msg-body";
-      const aiBubble = document.createElement("div"); aiBubble.className = "msg-bubble";
-      aiBubble.innerHTML = formatMessageText(text);
-      const actions  = document.createElement("div"); actions.className = "msg-actions";
-      const copyBtn  = document.createElement("button"); copyBtn.className = "msg-action-btn"; copyBtn.type = "button"; copyBtn.textContent = "Copy";
-      copyBtn.addEventListener("click", () => copyText(text));
-      actions.appendChild(copyBtn);
-      aiBody.appendChild(aiBubble); aiBody.appendChild(actions);
-      aiMsg.appendChild(aiAvatar); aiMsg.appendChild(aiBody);
-      chatArea.insertBefore(aiMsg, thinkEl);
-    }
+    chatArea.insertBefore(createMessageElement(role, text), thinkEl);
   });
 
   chatArea.scrollTop = chatArea.scrollHeight;
@@ -620,7 +611,7 @@ function renderInsights(paper) {
     </svg>`;
   panel.appendChild(hero);
 
-const weights = analysis.weights || {};
+  const weights = analysis.weights || {};
   function fmtWeight(key, fallback) {
     const w = weights[key];
     return typeof w === "number" ? `${Math.round(w * 100)}%` : fallback;
@@ -632,7 +623,6 @@ const weights = analysis.weights || {};
     { key: "llm_perception",  label: "LLM Perception",  weight: fmtWeight("llm_perception", "40%"),  icon: "🤖" },
   ];
 
-  
   const compCard = document.createElement("div");
   compCard.style.cssText = "background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:18px;margin-bottom:16px;";
   const ct = document.createElement("div");
@@ -1077,13 +1067,7 @@ async function sendMessage() {
   if ((paper.indexStatus||"ready")==="indexing") { showToast("Paper is still being indexed. Please wait."); return; }
 
   const paperId = getPaperId(paper);
-  const userMsg=document.createElement("div"); userMsg.className="msg user";
-  const body=document.createElement("div"); body.className="msg-body";
-  const bubble=document.createElement("div"); bubble.className="msg-bubble"; bubble.textContent=message;
-  body.appendChild(bubble);
-  const avatar=document.createElement("div"); avatar.className="msg-avatar"; avatar.textContent="U";
-  userMsg.appendChild(body); userMsg.appendChild(avatar);
-  chatArea.insertBefore(userMsg,thinkEl);
+  chatArea.insertBefore(createMessageElement("user", message), thinkEl);
   pushChatMessage(paperId,"user",message);
 
   input.value=""; input.style.height="auto";
@@ -1097,28 +1081,16 @@ async function sendMessage() {
     pushChatMessage(paperId,"assistant",replyText);
 
     if (state.activePaperId===paperId) {
-      const aiMsg=document.createElement("div"); aiMsg.className="msg assistant";
-      const aiAvatar=document.createElement("div"); aiAvatar.className="msg-avatar"; aiAvatar.textContent="PM";
-      const aiBody=document.createElement("div"); aiBody.className="msg-body";
-      const aiBubble=document.createElement("div"); aiBubble.className="msg-bubble"; aiBubble.innerHTML=formatMessageText(replyText);
-      const actions=document.createElement("div"); actions.className="msg-actions";
-      const copyBtn=document.createElement("button"); copyBtn.className="msg-action-btn"; copyBtn.type="button"; copyBtn.textContent="Copy";
-      copyBtn.addEventListener("click",()=>copyText(replyText));
-      actions.appendChild(copyBtn); aiBody.appendChild(aiBubble); aiBody.appendChild(actions);
-      aiMsg.appendChild(aiAvatar); aiMsg.appendChild(aiBody);
-      chatArea.insertBefore(aiMsg,thinkEl); chatArea.scrollTop=chatArea.scrollHeight;
+      chatArea.insertBefore(createMessageElement("assistant", replyText), thinkEl);
+      chatArea.scrollTop=chatArea.scrollHeight;
     }
   } catch (error) {
     thinkEl.style.display="none";
     const errorText=error.message||"Error: Could not get response";
     pushChatMessage(paperId,"assistant",errorText);
     if (state.activePaperId===paperId) {
-      const aiMsg=document.createElement("div"); aiMsg.className="msg assistant";
-      const aiAvatar=document.createElement("div"); aiAvatar.className="msg-avatar"; aiAvatar.textContent="PM";
-      const aiBody=document.createElement("div"); aiBody.className="msg-body";
-      const aiBubble=document.createElement("div"); aiBubble.className="msg-bubble"; aiBubble.textContent=errorText;
-      aiBody.appendChild(aiBubble); aiMsg.appendChild(aiAvatar); aiMsg.appendChild(aiBody);
-      chatArea.insertBefore(aiMsg,thinkEl); chatArea.scrollTop=chatArea.scrollHeight;
+      chatArea.insertBefore(createMessageElement("assistant", errorText), thinkEl);
+      chatArea.scrollTop=chatArea.scrollHeight;
     }
   } finally {
     state.thinking=false;
