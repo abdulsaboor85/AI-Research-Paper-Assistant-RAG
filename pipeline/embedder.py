@@ -1,3 +1,6 @@
+import os
+os.environ["HF_HUB_OFFLINE"] = "1"          # don't touch the network at all
+os.environ["TRANSFORMERS_OFFLINE"] = "1"    # same, for transformers internals
 
 from pathlib import Path
 import chromadb
@@ -32,10 +35,6 @@ def embed_and_store(
     collection_name: str = DEFAULT_COLLECTION_NAME,
     force: bool = False,
 ) -> None:
-    """
-    Embed and store chunks. Skips if already indexed (unless force=True).
-    Uses batch encoding - much faster than default.
-    """
     if not force and collection_exists_and_has_data(collection_name):
         print(f"[embedder] '{collection_name}' already indexed - skipping.")
         return
@@ -47,7 +46,6 @@ def embed_and_store(
 
     collection = client.get_or_create_collection(collection_name)
 
-    # batch_size=64 is much faster than default
     embeddings = model.encode(
         chunks,
         batch_size=64,
