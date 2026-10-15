@@ -1,65 +1,47 @@
+"""Loads the embedding model + ChromaDB ONCE, and stores paper chunks."""
+
 import os
-os.environ["HF_HUB_OFFLINE"] = "1"          # don't touch the network at all
-os.environ["TRANSFORMERS_OFFLINE"] = "1"    # same, for transformers internals
+
+os.environ["HF_HUB_OFFLINE"] = "1"        # don't touch the network
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 from pathlib import Path
+
 import chromadb
 from sentence_transformers import SentenceTransformer
 
-EMBEDDING_MODEL_NAME    = "BAAI/bge-base-en-v1.5"
-DEFAULT_COLLECTION_NAME = "research_papers_v2"
+EMBEDDING_MODEL_NAME = "BAAI/bge-base-en-v1.5"
+CHROMA_PATH = Path(__file__).resolve().parent.parent / "chroma_db"
 
-BASE_DIR    = Path(__file__).resolve().parent.parent
-CHROMA_PATH = BASE_DIR / "chroma_db"
-
-print("[embedder] Loading SentenceTransformer model (first time only)...")
-model  = SentenceTransformer(EMBEDDING_MODEL_NAME)
+print("[embedder] Loading embedding model...")
+model = SentenceTransformer(EMBEDDING_MODEL_NAME)
 client = chromadb.PersistentClient(path=str(CHROMA_PATH))
 print("[embedder] Model ready.")
 
 
 def collection_exists_and_has_data(collection_name: str) -> bool:
     try:
-        col = client.get_collection(collection_name)
-        return col.count() > 0
+        return client.get_collection(collection_name).count() > 0
     except Exception:
         return False
 
 
-def get_or_create_collection(collection_name: str = "research_papers"):
-    return client.get_or_create_collection(name=collection_name)
-
-
-def embed_and_store(
-    chunks: list[str],
-    collection_name: str = DEFAULT_COLLECTION_NAME,
-    force: bool = False,
-) -> None:
-    if not force and collection_exists_and_has_data(collection_name):
-        print(f"[embedder] '{collection_name}' already indexed - skipping.")
-        return
-
+def embed_and_store(chunks: list[str], collection_name: str) -> None:
+    """Replace the collection with fresh embeddings of `chunks`."""
     try:
         client.delete_collection(collection_name)
     except Exception:
-        pass
+        pass  # didn't exist yet
 
-    collection = client.get_or_create_collection(collection_name)
-
+    collection = client.create_collection(collection_name)
     embeddings = model.encode(
-        chunks,
-        batch_size=64,
-        show_progress_bar=False,
-        convert_to_numpy=True,
+        chunks, batch_size=64, show_progress_bar=False, convert_to_numpy=True
     ).tolist()
-
-    ids       = [f"chunk_{i}" for i in range(len(chunks))]
-    metadatas = [{"chunk_index": i} for i in range(len(chunks))]
 
     collection.add(
         documents=chunks,
         embeddings=embeddings,
-        ids=ids,
-        metadatas=metadatas,
+        ids=[f"chunk_{i}" for i in range(len(chunks))],
+        metadatas=[{"chunk_index": i} for i in range(len(chunks))],
     )
     print(f"[embedder] Stored {len(chunks)} chunks in '{collection_name}'.")

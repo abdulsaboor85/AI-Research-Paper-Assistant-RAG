@@ -19,25 +19,18 @@
             <path d="M2 4 L2 12 Q2 14 4 14 L12 14 M4 2 L12 2 Q14 2 14 4 L14 10"/>
           </svg>
         </div>
-        <div>
+        <div class="brand">
           <div class="logo-text">PaperInsight AI</div>
           <div class="logo-sub">AI RESEARCH</div>
         </div>
-        <button class="dark-btn" id="darkBtn" onclick="toggleDark()">🌙</button>
-        <button class="dark-btn" onclick="logout()" title="Sign out" style="margin-left:4px">
-         <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="14" height="14"
-           stroke="currentColor" fill="none" stroke-width="1.8">
-           <path d="M6 3H3a1 1 0 00-1 1v8a1 1 0 001 1h3M10 11l3-3-3-3M13 8H6"/>
-          </svg>
-        </button>
       </div>
 
-     <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
+      <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
         <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
           <path d="M8 2 L8 10 M4 6 L8 2 L12 6"/>
         </svg>
         Upload Papers
-      </button> 
+      </button>
 
       <div class="drop-zone" id="dropZone">Drop PDFs here</div>
       <input type="file" id="fileInput" style="display:none" accept=".pdf" multiple />
@@ -53,6 +46,36 @@
           </svg>
           Compare
         </button>
+
+        <div class="sidebar-tools">
+          <button class="tool-btn" id="darkBtn" onclick="toggleDark()" title="Toggle theme">
+            <span id="darkIcon">🌙</span><span>Theme</span>
+          </button>
+
+          <div class="settings-wrap">
+            <button class="tool-btn" id="settingsBtn" onclick="toggleSettingsMenu(event)" title="Settings">
+              <span>⚙️</span><span>Settings</span>
+            </button>
+          </div>
+
+          <button class="tool-btn" onclick="logout()" title="Sign out">
+            <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="13" height="13"
+                 stroke="currentColor" fill="none" stroke-width="1.8">
+              <path d="M6 3H3a1 1 0 00-1 1v8a1 1 0 001 1h3M10 11l3-3-3-3M13 8H6"/>
+            </svg>
+            <span>Sign out</span>
+          </button>
+
+          <!-- Settings dropdown (opens upward) -->
+          <div class="settings-dropdown" id="settingsDropdown" style="display:none;">
+            <button class="settings-dropdown-item" onclick="openMemoryModal()">
+              🧠 Memory
+            </button>
+            <button class="settings-dropdown-item" onclick="openApiKeyModal()">
+              🔑 Gemini API Key
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -211,6 +234,59 @@
       </div>
     </div>
     <div class="pdf-fullscreen-body" id="pdfFullscreenBody"></div>
+  </div>
+
+  <!-- ── MEMORY MODAL (opened from Settings) ─────────────────── -->
+  <div class="modal-overlay" id="memoryModalOverlay" style="display:none;"
+       onclick="if(event.target===this) closeMemoryModal()">
+    <div class="modal-box modal-wide">
+      <div class="modal-head">
+        <div class="modal-title" style="margin-bottom:0;">🧠 Your Memory</div>
+        <button class="modal-close" onclick="closeMemoryModal()" title="Close">×</button>
+      </div>
+
+      <p class="modal-sub" style="margin-top:8px;">
+        Every term you explain is saved here. Known terms are removed from the
+        Prerequisites roadmap and lower your Difficulty Score. Forget a term and it
+        comes back into both.
+      </p>
+
+      <div class="memory-header-row">
+        <span class="memory-count" id="memoryCount">0 terms learned</span>
+        <button class="learned-terms-clear-btn" id="memoryClearAllBtn" onclick="deleteAllKnownTerms()">
+          Forget All
+        </button>
+      </div>
+
+      <div class="modal-scroll">
+        <div class="memory-terms-grid" id="memoryTermsGrid"></div>
+
+        <div class="memory-empty-state" id="memoryEmptyState" style="display:none;">
+          <div style="font-size:34px;margin-bottom:10px;">📭</div>
+          <div style="font-weight:600;color:var(--text);margin-bottom:4px;">No terms learned yet</div>
+          <div style="font-size:12.5px;color:var(--text2);">Explain a term in the Explain tab and it will show up here.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── API KEY MODAL ────────────────────────────────────────── -->
+  <div class="modal-overlay" id="apiKeyModalOverlay" style="display:none;"
+       onclick="if(event.target===this) closeApiKeyModal()">
+    <div class="modal-box">
+      <div class="modal-title">🔑 Gemini API Key</div>
+      <p class="modal-sub" id="apiKeyModalSub">
+        Paste your Gemini API key below. It's stored in your account, so you won't need a .env file.
+      </p>
+      <input type="password" id="apiKeyInput" class="field-input-modal" placeholder="AIza..." autocomplete="off" />
+      <div class="modal-actions">
+        <button class="modal-btn-secondary" id="apiKeyRemoveBtn" onclick="removeApiKey()" style="display:none;">
+          Remove Key
+        </button>
+        <button class="modal-btn-secondary" onclick="closeApiKeyModal()">Cancel</button>
+        <button class="modal-btn-primary" onclick="saveApiKey()">Save</button>
+      </div>
+    </div>
   </div>
 
   <div id="toastContainer" class="toast-container"></div>
