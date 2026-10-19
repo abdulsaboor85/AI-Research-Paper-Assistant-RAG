@@ -39,3 +39,6 @@ Thumbs.db
 *.bak
 
 .secret_key
+
+users.db.backup
+logs/
