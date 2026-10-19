@@ -1,62 +1,473 @@
 <!DOCTYPE html>
+<!--
+=====================================================================
+ index.html  -  the WHOLE app screen in ONE file
+=====================================================================
+ HOW THIS FILE WORKS (easy words)
+ ------------------------------------------------------------
+ This file has 3 parts:
+   PART 1  HTML  = the things you SEE (buttons, tabs, boxes)
+   PART 2  CSS   = how it LOOKS (colors, sizes, spacing)
+   PART 3  JS    = what HAPPENS when you click
+
+ The page never reloads. When you click a tab or a button, JavaScript:
+   1. asks the server (app.py) for data,
+   2. waits for the answer,
+   3. builds a bit of HTML and puts it on the page.
+
+ Words used in the JavaScript:
+   const          a value that never changes
+   let            a value that can change
+   function x() { }   a named block of steps. Call it with x()
+   async / await      "wait here until the server answers"
+   try / catch        "try this, and if there is an error do that"
+   `text ${a}`        a text with a value (a) put inside it
+
+ FUNCTION GUIDE (what each function does)
+ ------------------------------------------------------------
+ 2. SMALL HELPERS
+   byId              find an element on the page by its id
+   setText           change the text of an element
+   escapeHtml        make text safe to put inside HTML
+   showToast         show a small message at the bottom right
+   fetchJson         talk to the server and return its answer
+   getJson/postJson  ask the server for data / send data to it
+   copyText          copy text to the clipboard
+   showMessage       show an icon + title + text in a panel
+   onClickAll        add a click action to every matching element
+   pillStyle         colors for a small rounded label
+ 3. PAPERS (sidebar)
+   findPaper         find a paper by its id
+   getActivePaper    the selected paper
+   isIndexing        is the paper still being read by the server?
+   renderPapers      draw the paper list
+   selectPaper       the user clicked a paper
+   loadPapers        get all papers when the page opens
+   showProgressBar / hideProgressBar   the indexing bar
+   startIndexPolling check every 2 seconds if indexing is done
+   handleFiles       upload PDF files
+ 4. PDF VIEWER
+   loadPdfInViewer   open a PDF in the side panel
+   renderPdfPage     draw one PDF page (picture + selectable text)
+   renderSidebarPage / zoomPdf / goToPdfPage   side panel controls
+   buildTextLayer    make PDF words selectable
+   openPopupAt / setPopupHtml / positionPopup / closePopup   floating popup
+   popupCard / popupSection   pieces of the popup
+   getSelectedTerm / showExplainButton / explainSelectedTerm / setupPdfSelection
+                     "select a word in the PDF, then click Explain"
+   openFullscreen / closeFullscreen / renderFullscreenPage /
+   changeFullscreenPage / zoomFullscreen / handleFullscreenKey   big PDF view
+ 5. CHAT
+   formatMessageText turn **bold** and lists into HTML
+   createMessage     make one chat bubble
+   renderChat / loadChatHistory / addChatMessage   show the chat
+   sendMessage       send a question and show the answer
+   handleChatKey     Enter sends, Shift+Enter = new line
+ 6. INSIGHTS TAB (difficulty score)
+   clearSavedResults forget saved Insights and Prerequisites
+   renderInsights    draw the score page
+   loadInsightsTab   get the score and show it
+ 7. PREREQUISITES TAB (learning roadmap)
+   parsePrerequisites  split the text list into items
+   renderPrerequisites draw the roadmap
+   loadPrerequisitesTab get the roadmap and show it
+ 8. EXPLAIN TAB
+   openExplainFor    jump to the Explain tab with a term
+   startExplainProgress  the friendly loading bar
+   explainTerm       ask the server to explain a term
+   renderExplainResult  draw the explanation
+   handleExplainKey  Enter starts the explanation
+ 9. SUMMARY TAB
+   withUnit          "94" + "%" -> "94%"
+   summaryPlainText  the summary as plain text (Copy notes)
+   comparisonRowHtml one "old vs new" number row
+   keyNumbersHtml    the big number tiles
+   renderSummary     draw the summary
+   loadSummaryTab    get the summary and show it
+ 10. WINDOWS (Memory + API key)
+   showWindow / toggleSettingsMenu / closeSettingsMenu
+   openMemoryModal / closeMemoryModal / loadKnownTerms /
+   renderMemoryModal / deleteKnownTerm / deleteAllKnownTerms
+   openApiKeyModal / closeApiKeyModal / saveApiKey / removeApiKey
+ 11. TABS AND START
+   getActiveTabName  name of the open tab
+   switchTab         show one tab, hide the others
+   toggleDark        light / dark switch
+   setupUploadButtons / setupResizeHandle   upload and panel resize
+   logout            sign out
+   init              runs once when the page opens
+=====================================================================
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PaperInsight-AI Research Assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./style.css">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+
+<style>
+/* =====================================================================
+   PART 2: CSS  (how it looks)
+   1 Colors and base | 2 Sidebar | 3 Tabs | 4 Shared pieces | 5 Chat |
+   6 PDF panel | 7 Insights, Prerequisites, Explain | 8 Summary | 9 Windows and popups
+   ===================================================================== */
+
+/* ---------- 1. COLORS AND BASE ---------- */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {                                  /* light colors */
+  --bg: #f4f2ee; --surface: #ffffff; --surface2: #f0ede8;
+  --border: rgba(0,0,0,0.08); --border2: rgba(0,0,0,0.15);
+  --text: #1a1916; --text2: #6b6860; --text3: #9e9b96;
+  --accent: #2d5be3; --accent-soft: #e8edfc; --accent-border: rgba(45,91,227,0.25);
+  --amber: #d97706; --amber-soft: #fef3c7;
+  --green: #16a34a; --green-soft: #dcfce7;
+  --red: #dc2626; --red-soft: #fee2e2;
+  --font: 'DM Sans', system-ui, sans-serif; --serif: 'Instrument Serif', Georgia, serif;
+  --radius: 10px; --radius-lg: 14px; --radius-xl: 20px;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.06); --shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+body.dark {                              /* dark colors */
+  --bg: #0f0f0e; --surface: #1a1916; --surface2: #222120;
+  --border: rgba(255,255,255,0.07); --border2: rgba(255,255,255,0.14);
+  --text: #f0ede8; --text2: #9e9b96; --text3: #6b6860;
+  --accent: #5b7ff0; --accent-soft: #1a2540; --accent-border: rgba(91,127,240,0.3);
+  --amber: #fbbf24; --amber-soft: #2d2210;
+  --green: #4ade80; --green-soft: #0f2d1a;
+  --red: #f87171; --red-soft: #2d0f0f;
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.4); --shadow: 0 4px 12px rgba(0,0,0,0.5);
+}
+
+html, body { height: 100%; overflow: hidden; }
+body { font-family: var(--font); background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.5; transition: background 0.2s, color 0.2s; }
+button, input, textarea { font-family: inherit; }
+.app { display: flex; height: 100vh; overflow: hidden; }
+
+@keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes pulse   { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
+@keyframes blink   { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes shimmer { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.75; } }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 99px; }
+
+/* ---------- 2. SIDEBAR ---------- */
+.sidebar { width: 250px; min-width: 250px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+.sidebar-header { padding: 16px 16px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+.logo-mark { width: 30px; height: 30px; background: var(--accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.logo-mark svg { width: 15px; height: 15px; stroke: white; fill: none; stroke-width: 2; }
+.logo-text { font-size: 15px; font-weight: 600; letter-spacing: -0.3px; white-space: nowrap; }
+.logo-sub { font-size: 9.5px; color: var(--text3); letter-spacing: 0.4px; }
+
+.upload-btn { margin: 12px 12px 6px; display: flex; align-items: center; gap: 7px; }
+.upload-btn svg { width: 13px; height: 13px; stroke: white; fill: none; stroke-width: 2.2; }
+.drop-zone { margin: 4px 12px 10px; border: 1.5px dashed var(--border2); border-radius: var(--radius); padding: 10px; text-align: center; color: var(--text3); font-size: 11px; cursor: pointer; transition: all 0.15s; }
+.drop-zone:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.section-label { padding: 6px 14px 3px; font-size: 10px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--text3); }
+
+.index-progress { margin: 0 14px 8px; }
+.small-label { font-size: 10px; color: var(--text3); margin-top: 4px; }
+
+.paper-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+.empty-note { padding: 16px; text-align: center; color: var(--text3); font-size: 12px; }
+.paper-item { padding: 9px 10px; border-radius: var(--radius); cursor: pointer; display: flex; align-items: flex-start; gap: 8px; margin-bottom: 2px; border: 1px solid transparent; transition: background 0.12s; }
+.paper-item:hover { background: var(--surface2); }
+.paper-item.active { background: var(--accent-soft); border-color: var(--accent-border); }
+.paper-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 4px; flex-shrink: 0; }
+.paper-dot.ready { background: var(--green); }
+.paper-dot.error { background: var(--red); }
+.paper-dot.indexing { background: var(--amber); animation: blink 1.2s infinite; }
+.paper-info { flex: 1; min-width: 0; }
+.paper-title { font-size: 12px; font-weight: 500; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.paper-meta { font-size: 10px; color: var(--text3); margin-top: 2px; }
+.amber { color: var(--amber); }
+.red { color: var(--red); }
+.mini-bar { height: 3px; background: var(--surface2); border-radius: 99px; margin-top: 4px; overflow: hidden; }
+.mini-fill { height: 100%; background: var(--amber); transition: width 0.4s; }
+
+.sidebar-footer { padding: 12px; border-top: 1px solid var(--border); }
+.sidebar-tools { position: relative; display: flex; gap: 6px; }
+.settings-wrap { flex: 1; display: flex; }
+.tool-btn { flex: 1; height: 34px; display: flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--border2); border-radius: 8px; background: transparent; color: var(--text2); font-size: 11px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.tool-btn:hover { background: var(--surface2); color: var(--text); }
+.dropdown { position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); z-index: 200; overflow: hidden; }
+.dropdown-item { display: block; width: 100%; text-align: left; padding: 11px 14px; background: transparent; border: none; font-size: 12.5px; color: var(--text); cursor: pointer; }
+.dropdown-item:hover { background: var(--surface2); }
+
+/* ---------- 3. TABS ---------- */
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.tabs-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 18px; display: flex; align-items: center; gap: 3px; height: 48px; flex-shrink: 0; overflow-x: auto; scrollbar-width: none; }
+.tabs-bar::-webkit-scrollbar { display: none; }
+.tab { padding: 5px 13px; border-radius: 99px; font-size: 12.5px; font-weight: 500; color: var(--text2); cursor: pointer; border: none; background: transparent; white-space: nowrap; transition: all 0.15s; }
+.tab:hover { background: var(--surface2); color: var(--text); }
+.tab.active { background: var(--accent); color: white; }
+.tab-content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.tab-panel { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+.tab-panel.active { display: flex; }
+.content-panel { flex: 1; overflow-y: auto; padding: 18px; }
+.section-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+
+/* ---------- 4. SHARED PIECES ---------- */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px; margin-bottom: 16px; }
+.card-title { font-size: 13px; font-weight: 600; margin-bottom: 14px; }
+.tiny-label { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.primary-btn { padding: 10px 20px; background: var(--accent); color: white; border: none; border-radius: var(--radius); cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.15s; flex-shrink: 0; }
+.primary-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+.ghost-btn { padding: 8px 14px; background: transparent; border: 1px solid var(--border2); border-radius: var(--radius); color: var(--text2); font-size: 12.5px; cursor: pointer; }
+.ghost-btn:hover { background: var(--surface2); color: var(--text); }
+.small-btn { padding: 4px 8px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--text); cursor: pointer; }
+.small-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
+.pill-btn { background: var(--surface); color: var(--text2); border: 1px solid var(--border2); border-radius: 99px; padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.pill-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
+.pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 99px; border: 1px solid; }
+
+.note { border: 1px solid; border-radius: var(--radius-lg); padding: 10px 14px; margin-bottom: 14px; font-size: 12px; line-height: 1.5; }
+.note-green { background: var(--green-soft); border-color: var(--green); color: var(--green); }
+.note-accent { background: var(--accent-soft); border-color: var(--accent-border); }
+.note-title { font-size: 13px; font-weight: 600; color: var(--accent); }
+
+.bar { height: 8px; background: var(--surface2); border-radius: 99px; overflow: hidden; }
+.bar-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width 0.5s ease; }
+
+.message-box { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 48px 24px; background: var(--surface); border: 1.5px dashed var(--border2); border-radius: var(--radius-xl); margin: 8px 0; }
+.message-icon { font-size: 40px; margin-bottom: 14px; line-height: 1; }
+.message-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+.message-text { font-size: 12.5px; color: var(--text2); line-height: 1.7; max-width: 340px; }
+.shimmer { background: var(--surface2); border-radius: 5px; height: 9px; margin-bottom: 6px; animation: shimmer 1.6s ease-in-out infinite; }
+
+/* ---------- 5. CHAT ---------- */
+.chat-container { display: flex; flex-direction: column; height: 100%; }
+.chat-area { flex: 1; overflow-y: auto; padding: 20px 22px; display: flex; flex-direction: column; gap: 16px; }
+.msg { display: flex; gap: 10px; animation: slideIn 0.3s ease-out; }
+.msg.user { justify-content: flex-end; }
+.msg-avatar { width: 32px; height: 32px; border-radius: 8px; background: var(--accent); color: white; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 11px; flex-shrink: 0; }
+.msg.user .msg-avatar { background: var(--surface2); color: var(--text); }
+.msg-body { display: flex; flex-direction: column; gap: 6px; max-width: 78%; }
+.msg.user .msg-body { align-items: flex-end; }
+.msg-bubble { background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-sm); padding: 12px 16px; border-radius: 14px; line-height: 1.65; word-wrap: break-word; }
+.msg.user .msg-bubble { background: var(--accent); color: #fff; border-color: transparent; }
+.msg-actions { opacity: 0; transition: opacity 0.2s; }
+.msg:hover .msg-actions { opacity: 1; }
+.msg-bubble p { margin: 0 0 8px; }
+.msg-bubble p:last-child { margin-bottom: 0; }
+.msg-bubble ul, .msg-bubble ol { margin: 4px 0 8px 18px; }
+.msg-bubble li { margin-bottom: 4px; }
+.msg-heading { font-size: 13px; font-weight: 600; margin: 4px 0 6px; }
+.thinking-msg { display: flex; align-items: center; gap: 6px; justify-content: center; padding: 16px; }
+.thinking-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s infinite; }
+.thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+.chat-input-wrapper { display: flex; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--border); flex-shrink: 0; }
+.chat-input { flex: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font-size: 13px; resize: none; max-height: 100px; }
+.chat-input:focus, .explain-input:focus, .modal-input:focus { outline: none; border-color: var(--accent); }
+
+/* ---------- 6. PDF PANEL ---------- */
+.resize-handle { width: 4px; background: var(--border); cursor: col-resize; flex-shrink: 0; }
+.resize-handle:hover { background: var(--accent); }
+.pdf-panel { width: 350px; min-width: 280px; background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+.pdf-header { padding: 10px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; gap: 8px; }
+.pdf-header h3 { font-size: 13px; font-weight: 600; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pdf-tools { display: flex; align-items: center; gap: 6px; }
+.icon-btn { width: 28px; height: 28px; border: 1px solid var(--border2); border-radius: 7px; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text2); flex-shrink: 0; padding: 0; }
+.icon-btn svg { width: 13px; height: 13px; }
+.icon-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
+.pdf-close { width: 28px; height: 28px; border: none; background: transparent; cursor: pointer; font-size: 20px; color: var(--text2); }
+.pdf-close:hover { color: var(--text); }
+.zoom-label { font-size: 11px; color: var(--text2); min-width: 34px; text-align: center; font-weight: 500; }
+.pdf-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; align-items: center; justify-content: center; }
+.pdf-body.showing-page { padding: 8px; align-items: flex-start; }
+.pdf-placeholder { text-align: center; color: var(--text3); display: flex; flex-direction: column; align-items: center; gap: 10px; font-size: 12px; }
+.pdf-placeholder svg { width: 48px; height: 48px; opacity: 0.5; }
+.pdf-footer { padding: 10px 14px; border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: center; gap: 10px; flex-shrink: 0; }
+.nav-btn { padding: 6px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--text); cursor: pointer; }
+.nav-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
+.page-info { font-size: 12px; color: var(--text2); min-width: 50px; text-align: center; }
+
+.fullscreen-overlay { display: none; position: fixed; inset: 0; z-index: 9000; background: #111; flex-direction: column; }
+.fullscreen-overlay.open { display: flex; }
+.fullscreen-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 18px; background: #1a1a1a; border-bottom: 1px solid rgba(255,255,255,0.1); flex-shrink: 0; gap: 12px; }
+.fullscreen-title { font-size: 13px; font-weight: 600; color: #e0e0e0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.fs-tools { display: flex; align-items: center; gap: 8px; }
+.fs-btn { height: 32px; padding: 0 10px; border: 1px solid rgba(255,255,255,0.15); border-radius: 7px; background: rgba(255,255,255,0.07); color: #ccc; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.fs-btn:hover { background: var(--accent); color: white; border-color: var(--accent); }
+.fs-zoom { font-size: 11px; color: #ccc; min-width: 40px; text-align: center; }
+.fullscreen-body { flex: 1; overflow-y: auto; display: flex; justify-content: center; align-items: flex-start; padding: 24px 16px; background: #1c1c1c; }
+
+/* selectable PDF text (PDF.js sets the size of the letters) */
+.pdf-page-wrap { position: relative; isolation: isolate; }
+.pdf-page-wrap > canvas { position: relative; z-index: 1; display: block; border-radius: 6px; }
+.pdf-text-layer { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; overflow: hidden; line-height: 1; transform-origin: 0 0; user-select: text !important; -webkit-user-select: text !important; cursor: text; }
+.pdf-text-layer > span, .pdf-text-layer > br { color: transparent !important; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; user-select: text !important; -webkit-user-select: text !important; }
+.pdf-text-layer > span::selection { background: rgba(45,91,227,0.35); color: transparent; }
+
+/* ---------- 7. INSIGHTS, PREREQUISITES, EXPLAIN ---------- */
+.hero-card { padding: 24px; display: flex; align-items: center; justify-content: space-between; }
+.big-score { font-size: 42px; font-weight: 700; line-height: 1; margin: 6px 0 10px; }
+.big-score span { font-size: 18px; color: var(--text2); font-weight: 400; }
+.ring-text { font-size: 16px; font-weight: 700; fill: var(--text); }
+.comp-row { margin-bottom: 14px; }
+.comp-head { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 12px; color: var(--text2); }
+.comp-head b { color: var(--text); }
+.comp-head small { color: var(--text3); font-size: 10px; }
+.stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.stat { background: var(--surface2); border-radius: var(--radius); padding: 10px 12px; }
+.stat-value { font-size: 15px; font-weight: 600; margin-top: 2px; }
+
+.prereq-card { display: flex; align-items: flex-start; gap: 14px; padding: 14px 16px; margin-bottom: 10px; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius-lg); cursor: pointer; transition: all 0.15s; }
+.prereq-card:hover { background: var(--accent-soft); transform: translateY(-1px); }
+.prereq-badge { min-width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: white; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+.prereq-body { flex: 1; min-width: 0; }
+.prereq-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.prereq-name { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+.prereq-desc { font-size: 12px; color: var(--text2); line-height: 1.6; }
+.prereq-chip { font-size: 10px; color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-border); border-radius: 99px; padding: 2px 8px; white-space: nowrap; opacity: 0; transition: opacity 0.2s; }
+.prereq-card:hover .prereq-chip { opacity: 1; }
+.legend { display: flex; gap: 16px; padding: 10px 4px; flex-wrap: wrap; font-size: 11px; color: var(--text3); }
+.legend span { display: flex; align-items: center; gap: 5px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+.explain-search { display: flex; gap: 10px; margin-bottom: 20px; }
+.explain-input { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font-size: 13px; }
+.explain-badge { display: inline-block; padding: 4px 12px; border-radius: 99px; font-size: 11px; font-weight: 600; margin-bottom: 16px; border: 1px solid; }
+.explain-term { font-size: 22px; font-weight: 700; margin-bottom: 20px; letter-spacing: -0.3px; }
+.explain-card { border-left: 3px solid var(--accent); padding: 18px 20px; margin-bottom: 14px; }
+.explain-card.green { border-left-color: var(--green); }
+.explain-card.amber { border-left-color: var(--amber); background: var(--amber-soft); }
+.explain-card-title { font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+.explain-card-text { font-size: 13.5px; line-height: 1.75; }
+.explain-card.amber .explain-card-text { font-style: italic; }
+.explain-hint { font-size: 11px; color: var(--text3); text-align: center; }
+.skeleton { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; opacity: 0.5; margin-bottom: 10px; }
+
+/* ---------- 8. SUMMARY ---------- */
+#summaryContent { max-width: 760px; margin: 0 auto; }
+.sum-head { background: linear-gradient(135deg, var(--accent-soft), var(--surface)); border: 1px solid var(--accent-border); border-radius: var(--radius-xl); padding: 20px 22px 16px; margin-bottom: 18px; }
+.sum-title { font-family: var(--serif); font-size: 24px; line-height: 1.3; margin-bottom: 16px; }
+.sum-bar-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.sum-toggle { display: inline-flex; background: var(--surface); border: 1px solid var(--border2); border-radius: 99px; padding: 3px; }
+.sum-toggle button { border: none; background: transparent; color: var(--text2); font-size: 12.5px; font-weight: 600; padding: 6px 18px; border-radius: 99px; cursor: pointer; }
+.sum-toggle button.active { background: var(--accent); color: white; }
+.sum-actions { display: flex; gap: 8px; }
+.sum-card { --tone: var(--accent); background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--tone); border-radius: var(--radius-lg); padding: 18px 22px 20px; margin-bottom: 14px; box-shadow: var(--shadow-sm); animation: slideIn 0.35s ease-out both; }
+.tone-blue { --tone: var(--accent); } .tone-amber { --tone: var(--amber); } .tone-purple { --tone: #8b5cf6; } .tone-green { --tone: var(--green); } .tone-red { --tone: var(--red); }
+.sum-card.is-results { background: color-mix(in srgb, var(--green) 7%, var(--surface)); }
+.sum-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.sum-card-icon { width: 32px; height: 32px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; background: color-mix(in srgb, var(--tone) 14%, transparent); }
+.sum-card-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; color: var(--tone); }
+.sum-text { font-size: 14.5px; line-height: 1.8; }
+.sum-compare { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-top: 14px; }
+.sum-compare-metric { font-size: 13px; font-weight: 700; margin-bottom: 10px; }
+.sum-compare-vals { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.sum-compare-label { font-size: 10.5px; font-weight: 600; color: var(--text3); text-transform: uppercase; }
+.sum-compare-num { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.sum-arrow { color: var(--text3); font-size: 18px; }
+.sum-change { margin-left: auto; font-size: 13px; font-weight: 700; padding: 5px 14px; border-radius: 99px; border: 1px solid var(--border2); white-space: nowrap; }
+.sum-change.good { color: var(--green); background: var(--green-soft); border-color: var(--green); }
+.sum-change.bad { color: var(--red); background: var(--red-soft); border-color: var(--red); }
+.sum-change.neutral { color: var(--text2); background: var(--surface2); }
+.sum-bars { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.sum-bars .bar-fill.old { background: var(--text3); }
+.sum-bars .bar-fill.good { background: var(--green); }
+.sum-bars .bar-fill.bad { background: var(--red); }
+.sum-numbers { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 14px; }
+.sum-number { background: var(--surface); border: 1px solid var(--border); border-top: 3px solid var(--green); border-radius: var(--radius); padding: 14px 10px; text-align: center; }
+.sum-number-value { font-size: 22px; font-weight: 700; color: var(--green); line-height: 1.2; }
+.sum-number-label { font-size: 11.5px; color: var(--text2); margin-top: 4px; }
+
+/* ---------- 9. WINDOWS, POPUPS, TOASTS ---------- */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 9500; align-items: center; justify-content: center; }
+.modal-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px; width: 100%; max-width: 380px; box-shadow: var(--shadow); }
+.modal-box.wide { max-width: 560px; max-height: 82vh; display: flex; flex-direction: column; }
+.modal-head { display: flex; align-items: center; justify-content: space-between; }
+.modal-title { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
+.modal-sub { font-size: 12px; color: var(--text2); line-height: 1.6; margin-bottom: 16px; }
+.modal-close { width: 28px; height: 28px; border: none; background: transparent; color: var(--text2); font-size: 22px; cursor: pointer; border-radius: 7px; }
+.modal-close:hover { background: var(--surface2); color: var(--text); }
+.modal-scroll { overflow-y: auto; min-height: 0; }
+.modal-input { width: 100%; padding: 10px 12px; border: 1px solid var(--border2); border-radius: var(--radius); background: var(--bg); color: var(--text); font-size: 13px; margin-bottom: 18px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.memory-header-row { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 14px; }
+.memory-count { font-size: 12.5px; font-weight: 600; color: var(--text2); }
+.forget-btn { padding: 4px 10px; background: transparent; border: 1px solid var(--red); color: var(--red); border-radius: 99px; font-size: 11px; font-weight: 600; cursor: pointer; }
+.forget-btn:hover { background: var(--red); color: white; }
+.memory-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.memory-term { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.memory-term:hover { border-color: var(--accent-border); background: var(--accent-soft); }
+.memory-term span { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.memory-term button { background: transparent; border: none; cursor: pointer; font-size: 13px; opacity: 0.6; }
+.memory-term button:hover { opacity: 1; }
+.memory-empty { display: none; flex-direction: column; align-items: center; text-align: center; padding: 48px 24px; border: 1.5px dashed var(--border2); border-radius: var(--radius-xl); }
+
+.toast-container { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 10px; pointer-events: none; z-index: 9999; }
+.toast { background: var(--text); color: var(--surface); padding: 12px 16px; border-radius: var(--radius); box-shadow: var(--shadow); font-size: 12px; animation: slideIn 0.3s ease-out; }
+
+.explain-popup { display: none; position: fixed !important; z-index: 2147483647 !important; width: max-content; max-width: calc(100vw - 16px); }
+.popup-trigger { background: var(--accent); color: white; border: none; border-radius: 8px; padding: 8px 14px; font-size: 12.5px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow); max-width: calc(100vw - 16px); overflow-wrap: anywhere; }
+.popup-loading, .popup-error { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 12px; color: var(--text2); box-shadow: var(--shadow); }
+.popup-error { background: var(--red-soft); border-color: var(--red); color: var(--red); }
+.popup-card { width: min(440px, calc(100vw - 16px)); max-height: min(560px, calc(100vh - 16px)); overflow-y: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); overflow-wrap: anywhere; }
+.popup-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; font-size: 13.5px; }
+.popup-close { background: transparent; border: none; font-size: 18px; cursor: pointer; color: var(--text2); line-height: 1; }
+.popup-section { font-size: 12.5px; color: var(--text2); line-height: 1.6; margin-bottom: 10px; }
+.popup-section b { color: var(--text); }
+</style>
 </head>
+
+<!-- =====================================================================
+     PART 1: HTML  (what you see)
+     ===================================================================== -->
 <body>
   <div class="app">
 
-    <!-- ── SIDEBAR ─────────────────────────────────────────────── -->
+    <!-- ===== SIDEBAR ===== -->
     <div class="sidebar">
       <div class="sidebar-header">
-        <div class="logo-mark">
-          <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-            <path d="M2 4 L2 12 Q2 14 4 14 L12 14 M4 2 L12 2 Q14 2 14 4 L14 10"/>
-          </svg>
-        </div>
+        <div class="logo-mark"><svg viewBox="0 0 16 16"><path d="M2 4 L2 12 Q2 14 4 14 L12 14 M4 2 L12 2 Q14 2 14 4 L14 10"/></svg></div>
         <div>
           <div class="logo-text">PaperInsight AI</div>
           <div class="logo-sub">AI RESEARCH</div>
         </div>
-        <button class="dark-btn" id="darkBtn" onclick="toggleDark()">🌙</button>
-        <button class="dark-btn" onclick="logout()" title="Sign out" style="margin-left:4px">
-         <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" width="14" height="14"
-           stroke="currentColor" fill="none" stroke-width="1.8">
-           <path d="M6 3H3a1 1 0 00-1 1v8a1 1 0 001 1h3M10 11l3-3-3-3M13 8H6"/>
-          </svg>
-        </button>
       </div>
 
-     <button class="upload-btn" onclick="document.getElementById('fileInput').click()">
-        <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-          <path d="M8 2 L8 10 M4 6 L8 2 L12 6"/>
-        </svg>
+      <button class="primary-btn upload-btn" onclick="byId('fileInput').click()">
+        <svg viewBox="0 0 16 16"><path d="M8 2 L8 10 M4 6 L8 2 L12 6"/></svg>
         Upload Papers
-      </button> 
-
+      </button>
       <div class="drop-zone" id="dropZone">Drop PDFs here</div>
       <input type="file" id="fileInput" style="display:none" accept=".pdf" multiple />
 
       <div class="section-label">Your Papers</div>
+      <div class="index-progress" id="indexProgress" style="display:none;">
+        <div class="bar"><div class="bar-fill" id="indexFill"></div></div>
+        <div class="small-label" id="indexLabel"></div>
+      </div>
       <div class="paper-list" id="paperList"></div>
 
       <div class="sidebar-footer">
-        <button class="compare-btn" onclick="switchTab('comparison')">
-          <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
-            <rect x="1" y="3" width="6" height="10" rx="1"/>
-            <rect x="9" y="3" width="6" height="10" rx="1"/>
-          </svg>
-          Compare
-        </button>
+        <div class="sidebar-tools">
+          <button class="tool-btn" onclick="toggleDark()"><span id="darkIcon">🌙</span><span>Theme</span></button>
+          <div class="settings-wrap">
+            <button class="tool-btn" id="settingsBtn" onclick="toggleSettingsMenu(event)"><span>⚙️</span><span>Settings</span></button>
+          </div>
+          <button class="tool-btn" onclick="logout()">
+            <svg viewBox="0 0 16 16" width="13" height="13" stroke="currentColor" fill="none" stroke-width="1.8"><path d="M6 3H3a1 1 0 00-1 1v8a1 1 0 001 1h3M10 11l3-3-3-3M13 8H6"/></svg>
+            <span>Sign out</span>
+          </button>
+
+          <!-- Settings menu (opens upward) -->
+          <div class="dropdown" id="settingsDropdown" style="display:none;">
+            <button class="dropdown-item" onclick="openMemoryModal()">🧠 Memory</button>
+            <button class="dropdown-item" onclick="openApiKeyModal()">🔑 Gemini API Key</button>
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- ── MAIN CONTENT ───────────────────────────────────────── -->
+    <!-- ===== MAIN AREA (tabs) ===== -->
     <div class="main">
       <div class="tabs-bar">
         <button class="tab active" id="tab-chat"          onclick="switchTab('chat')">Chat</button>
@@ -64,42 +475,34 @@
         <button class="tab"        id="tab-insights"      onclick="switchTab('insights')">Insights</button>
         <button class="tab"        id="tab-prerequisites" onclick="switchTab('prerequisites')">Prerequisites</button>
         <button class="tab"        id="tab-explain"       onclick="switchTab('explain')">Explain</button>
-        <button class="tab"        id="tab-comparison"    onclick="switchTab('comparison')">Comparison</button>
       </div>
 
       <div class="tab-content">
 
-        <!-- CHAT TAB -->
+        <!-- Chat -->
         <div id="panel-chat" class="tab-panel active">
           <div class="chat-container">
             <div class="chat-area" id="chatArea">
               <div class="thinking-msg" id="thinkingMsg" style="display:none">
-                <div class="thinking-dot"></div>
-                <div class="thinking-dot"></div>
-                <div class="thinking-dot"></div>
+                <div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div>
               </div>
             </div>
             <div class="chat-input-wrapper">
-              <textarea
-                id="chatInput"
-                class="chat-input"
-                placeholder="Ask about the paper..."
-                onkeydown="handleKey(event)"
-              ></textarea>
-              <button class="send-btn" onclick="sendMessage()">Send</button>
+              <textarea id="chatInput" class="chat-input" placeholder="Ask about the paper..." onkeydown="handleChatKey(event)"></textarea>
+              <button class="primary-btn" onclick="sendMessage()">Send</button>
             </div>
           </div>
         </div>
 
-        <!-- SUMMARY TAB -->
+        <!-- Summary -->
         <div id="panel-summary" class="tab-panel">
           <div class="content-panel">
             <div class="section-title">Paper Summary</div>
-            <div class="accordion" id="summaryAccordion"></div>
+            <div id="summaryContent"></div>
           </div>
         </div>
 
-        <!-- INSIGHTS TAB -->
+        <!-- Insights -->
         <div id="panel-insights" class="tab-panel">
           <div class="content-panel">
             <div class="section-title">Difficulty Analysis</div>
@@ -107,7 +510,7 @@
           </div>
         </div>
 
-        <!-- PREREQUISITES TAB -->
+        <!-- Prerequisites -->
         <div id="panel-prerequisites" class="tab-panel">
           <div class="content-panel">
             <div class="section-title">Prerequisites Roadmap</div>
@@ -115,108 +518,1772 @@
           </div>
         </div>
 
-        <!-- EXPLAIN TAB -->
+        <!-- Explain -->
         <div id="panel-explain" class="tab-panel">
           <div class="content-panel">
             <div class="section-title">Term Explainer</div>
-            <div class="explain-search-wrapper">
-              <input
-                type="text"
-                id="explainInput"
-                class="explain-input"
-                placeholder="Type a term... e.g. backpropagation, entropy, LSTM"
-                onkeydown="handleExplainKey(event)"
-              />
-              <button class="explain-btn" onclick="explainTerm()">Explain</button>
+            <div class="explain-search">
+              <input type="text" id="explainInput" class="explain-input" placeholder="Type a term... e.g. backpropagation, entropy, LSTM" onkeydown="handleExplainKey(event)" />
+              <button class="primary-btn" onclick="explainTerm()">Explain</button>
             </div>
             <div id="explainContent"></div>
           </div>
         </div>
 
-        <!-- COMPARISON TAB -->
-        <div id="panel-comparison" class="tab-panel">
-          <div class="content-panel">
-            <div class="section-title">Paper Comparison</div>
-            <div id="comparisonContent"></div>
-          </div>
-        </div>
-
       </div>
     </div>
 
-    <!-- ── PDF VIEWER ─────────────────────────────────────────── -->
+    <!-- ===== PDF PANEL (right side) ===== -->
     <div class="resize-handle" id="resizeHandle"></div>
     <div class="pdf-panel" id="pdfPanel">
       <div class="pdf-header">
         <h3 id="pdfTitle">Select a paper to view</h3>
-        <div style="display:flex;align-items:center;gap:6px;">
-          <button class="pdf-icon-btn" id="pdfZoomOutBtn"  onclick="pdfZoom(-0.25)" title="Zoom out">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14" y2="14"/><line x1="4.5" y1="6.5" x2="8.5" y2="6.5"/>
-            </svg>
+        <div class="pdf-tools">
+          <button class="icon-btn" onclick="zoomPdf(-0.25)" title="Zoom out">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14" y2="14"/><line x1="4.5" y1="6.5" x2="8.5" y2="6.5"/></svg>
           </button>
-          <span class="pdf-zoom-label" id="pdfZoomLabel">100%</span>
-          <button class="pdf-icon-btn" id="pdfZoomInBtn"   onclick="pdfZoom(0.25)"  title="Zoom in">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14" y2="14"/>
-              <line x1="6.5" y1="4.5" x2="6.5" y2="8.5"/><line x1="4.5" y1="6.5" x2="8.5" y2="6.5"/>
-            </svg>
+          <span class="zoom-label" id="pdfZoomLabel">100%</span>
+          <button class="icon-btn" onclick="zoomPdf(0.25)" title="Zoom in">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14" y2="14"/><line x1="6.5" y1="4.5" x2="6.5" y2="8.5"/><line x1="4.5" y1="6.5" x2="8.5" y2="6.5"/></svg>
           </button>
-          <button class="pdf-icon-btn" id="pdfFullscreenBtn" onclick="openPdfFullscreen()" title="Fullscreen">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/>
-            </svg>
+          <button class="icon-btn" onclick="openFullscreen()" title="Fullscreen">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg>
           </button>
           <button class="pdf-close" id="pdfCloseBtn">×</button>
         </div>
       </div>
-      <div class="pdf-body" id="pdfBody">
-        <div class="pdf-placeholder">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
-          </svg>
-          <p>Upload a paper to preview</p>
-        </div>
-      </div>
+      <div class="pdf-body" id="pdfBody"></div>
       <div class="pdf-footer">
-        <button class="pdf-nav-btn" onclick="changePage(-1)">← Prev</button>
+        <button class="nav-btn" onclick="goToPdfPage(-1)">← Prev</button>
         <span class="page-info" id="pageInfo">0 / 0</span>
-        <button class="pdf-nav-btn" onclick="changePage(1)">Next →</button>
+        <button class="nav-btn" onclick="goToPdfPage(1)">Next →</button>
       </div>
     </div>
-
   </div>
 
-  <!-- ── FULLSCREEN OVERLAY ──────────────────────────────────── -->
-  <div class="pdf-fullscreen-overlay" id="pdfFullscreenOverlay">
-    <div class="pdf-fullscreen-header">
-      <span class="pdf-fullscreen-title" id="pdfFullscreenTitle">Paper</span>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <button class="pdf-fs-btn" onclick="pdfFsZoom(-0.25)" title="Zoom out">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-            <circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14" y2="14"/><line x1="4.5" y1="6.5" x2="8.5" y2="6.5"/>
-          </svg>
-        </button>
-        <span class="pdf-zoom-label" id="pdfFsZoomLabel">100%</span>
-        <button class="pdf-fs-btn" onclick="pdfFsZoom(0.25)" title="Zoom in">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-            <circle cx="6.5" cy="6.5" r="4.5"/><line x1="10" y1="10" x2="14" y2="14"/>
-            <line x1="6.5" y1="4.5" x2="6.5" y2="8.5"/><line x1="4.5" y1="6.5" x2="8.5" y2="6.5"/>
-          </svg>
-        </button>
-        <button class="pdf-fs-btn" onclick="changeFsPage(-1)">← Prev</button>
-        <span class="pdf-zoom-label" id="pdfFsPageInfo">0 / 0</span>
-        <button class="pdf-fs-btn" onclick="changeFsPage(1)">Next →</button>
-        <button class="pdf-fs-btn pdf-fs-close" onclick="closePdfFullscreen()" title="Close">✕</button>
+  <!-- ===== FULLSCREEN PDF ===== -->
+  <div class="fullscreen-overlay" id="pdfFullscreenOverlay">
+    <div class="fullscreen-header">
+      <span class="fullscreen-title" id="pdfFullscreenTitle">Paper</span>
+      <div class="fs-tools">
+        <button class="fs-btn" onclick="zoomFullscreen(-0.25)">−</button>
+        <span class="fs-zoom" id="pdfFsZoomLabel">100%</span>
+        <button class="fs-btn" onclick="zoomFullscreen(0.25)">+</button>
+        <button class="fs-btn" onclick="changeFullscreenPage(-1)">← Prev</button>
+        <span class="fs-zoom" id="pdfFsPageInfo">0 / 0</span>
+        <button class="fs-btn" onclick="changeFullscreenPage(1)">Next →</button>
+        <button class="fs-btn" onclick="closeFullscreen()">✕</button>
       </div>
     </div>
-    <div class="pdf-fullscreen-body" id="pdfFullscreenBody"></div>
+    <div class="fullscreen-body" id="pdfFullscreenBody"></div>
+  </div>
+
+  <!-- ===== MEMORY WINDOW ===== -->
+  <div class="modal-overlay" id="memoryModalOverlay" onclick="if (event.target === this) closeMemoryModal()">
+    <div class="modal-box wide">
+      <div class="modal-head">
+        <div class="modal-title">🧠 Your Memory</div>
+        <button class="modal-close" onclick="closeMemoryModal()">×</button>
+      </div>
+      <p class="modal-sub">Every term you explain is saved here. Known terms are removed from the Prerequisites roadmap and lower your Difficulty Score. Forget a term and it comes back into both.</p>
+      <div class="memory-header-row">
+        <span class="memory-count" id="memoryCount">0 terms learned</span>
+        <button class="forget-btn" id="memoryClearAllBtn" onclick="deleteAllKnownTerms()">Forget All</button>
+      </div>
+      <div class="modal-scroll">
+        <div class="memory-grid" id="memoryTermsGrid"></div>
+        <div class="memory-empty" id="memoryEmptyState">
+          <div style="font-size:34px;margin-bottom:10px;">📭</div>
+          <div style="font-weight:600;margin-bottom:4px;">No terms learned yet</div>
+          <div style="font-size:12.5px;color:var(--text2);">Explain a term in the Explain tab and it will show up here.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== API KEY WINDOW ===== -->
+  <div class="modal-overlay" id="apiKeyModalOverlay" onclick="if (event.target === this) closeApiKeyModal()">
+    <div class="modal-box">
+      <div class="modal-title">🔑 Gemini API Key</div>
+      <p class="modal-sub" id="apiKeyModalSub"></p>
+      <input type="password" id="apiKeyInput" class="modal-input" placeholder="AIza..." autocomplete="off" />
+      <div class="modal-actions">
+        <button class="ghost-btn" id="apiKeyRemoveBtn" onclick="removeApiKey()" style="display:none;">Remove Key</button>
+        <button class="ghost-btn" onclick="closeApiKeyModal()">Cancel</button>
+        <button class="primary-btn" onclick="saveApiKey()">Save</button>
+      </div>
+    </div>
   </div>
 
   <div id="toastContainer" class="toast-container"></div>
 
+  <!-- PDF.js: the library that draws PDF pages -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';</script>
-  <script src="./script.js"></script>
+  <script>pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";</script>
+
+<script>
+/* =====================================================================
+   PART 3: JAVASCRIPT  (what happens when you click)
+   ===================================================================== */
+
+/* ---------- 1. SETTINGS AND SHARED DATA ---------- */
+const KEY_DARK = "papermind_darkMode";             // the login page reads this too
+const KEY_PANEL_WIDTH = "papermind_pdfPanelWidth";
+const KEY_ACTIVE_PAPER = "papermind_activePaperId";
+
+const TABS = ["chat", "summary", "insights", "prerequisites", "explain"];
+const LABEL_COLORS = { Easy: "var(--green)", Medium: "var(--amber)", Hard: "var(--red)" };
+
+// "app" is the memory of the page: everything it needs to remember
+const app = {
+  isDark: false,
+  papers: [],               // all papers of the user
+  activePaperId: null,      // the selected paper
+  pollers: {},              // timers that check if indexing is done
+  thinking: false,          // true while we wait for a chat answer
+  knownTerms: [],           // the learned terms (Memory)
+  summaryMode: "short",     // "short" or "detailed"
+  // answers we already got, so we do not ask the server twice
+  insights: {}, prereqs: {}, explained: {}, summaries: {}, chats: {}, chatLoaded: {},
+  // the PDF viewer
+  pdfDoc: null, pdfZoom: 1, currentPage: 1, totalPages: 0, fsPage: 1, fsZoom: 1
+};
+
+const PDF_PLACEHOLDER = `
+  <div class="pdf-placeholder">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/></svg>
+    <p>Upload a paper to preview</p>
+  </div>`;
+
+/* ---------- 2. SMALL HELPERS ---------- */
+
+// Find an element on the page by its id
+function byId(id) {
+  return document.getElementById(id);
+}
+
+// Change the text of an element
+function setText(id, text) {
+  const element = byId(id);
+  if (element) {
+    element.textContent = text;
+  }
+}
+
+// Make text safe to put inside HTML (so < and > cannot break the page)
+function escapeHtml(text) {
+  let result = String(text === null || text === undefined ? "" : text);
+  result = result.replace(/&/g, "&amp;");
+  result = result.replace(/</g, "&lt;");
+  result = result.replace(/>/g, "&gt;");
+  result = result.replace(/"/g, "&quot;");
+  return result;
+}
+
+// Show a small message at the bottom right for a few seconds
+function showToast(message) {
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.textContent = message;
+  byId("toastContainer").appendChild(toast);
+  setTimeout(function () { toast.remove(); }, 3600);
+}
+
+// Talk to the server. Returns its answer as an object, or throws an error.
+async function fetchJson(url, options) {
+  const response = await fetch(url, options);
+  const text = await response.text();
+  let data = {};
+  try {
+    data = JSON.parse(text);
+  } catch (error) {
+    data = {};
+  }
+  if (!response.ok) {
+    throw new Error(data.error || "Request failed (" + response.status + ")");
+  }
+  return data;
+}
+
+// Ask the server for data
+function getJson(url) {
+  return fetchJson(url, { method: "GET" });
+}
+
+// Send data to the server
+function postJson(url, body) {
+  return fetchJson(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {})
+  });
+}
+
+// Copy text to the clipboard
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("Copied!");
+  } catch (error) {
+    showToast("Could not copy");
+  }
+}
+
+// Fill a panel with a big icon, a title and a text
+function showMessage(panel, icon, title, text) {
+  panel.innerHTML = `
+    <div class="message-box">
+      <div class="message-icon">${icon}</div>
+      <div class="message-title">${escapeHtml(title)}</div>
+      <div class="message-text">${escapeHtml(text)}</div>
+    </div>`;
+}
+
+// Add a click action to every element inside "root" that matches "selector"
+function onClickAll(root, selector, action) {
+  const elements = root.querySelectorAll(selector);
+  for (let i = 0; i < elements.length; i++) {
+    const element = elements[i];
+    element.addEventListener("click", function () { action(element); });
+  }
+}
+
+// Colors for a small rounded label: the text color + a light background of the same color
+function pillStyle(color) {
+  return "color:" + color + ";background:color-mix(in srgb, " + color + " 14%, transparent);border-color:color-mix(in srgb, " + color + " 35%, transparent);";
+}
+
+/* ---------- 3. PAPERS (sidebar) ---------- */
+
+// Find a paper by its id (or null)
+function findPaper(id) {
+  for (const paper of app.papers) {
+    if (paper.id === id) {
+      return paper;
+    }
+  }
+  return null;
+}
+
+// The selected paper. If none is selected, use the first one.
+function getActivePaper() {
+  const paper = findPaper(app.activePaperId);
+  if (paper) {
+    return paper;
+  }
+  if (app.papers.length > 0) {
+    return app.papers[0];
+  }
+  return null;
+}
+
+// True while the server is still reading the paper
+function isIndexing(paper) {
+  return paper.indexStatus === "indexing";
+}
+
+// Draw the list of papers in the sidebar
+function renderPapers() {
+  const list = byId("paperList");
+
+  if (app.papers.length === 0) {
+    list.innerHTML = '<div class="empty-note">No papers yet. Upload one to get started.</div>';
+    return;
+  }
+
+  let html = "";
+  for (const paper of app.papers) {
+    const activeClass = paper.id === app.activePaperId ? " active" : "";
+    let meta = "";
+    if (paper.indexStatus === "indexing") {
+      meta = `<span class="amber">${escapeHtml(paper.indexStep || "Indexing...")}</span>
+              <div class="mini-bar"><div class="mini-fill" style="width:${paper.indexPct}%"></div></div>`;
+    } else if (paper.indexStatus === "error") {
+      meta = '<span class="red">Index failed</span>';
+    }
+    html += `
+      <div class="paper-item${activeClass}" data-id="${escapeHtml(paper.id)}">
+        <div class="paper-dot ${paper.indexStatus}"></div>
+        <div class="paper-info">
+          <div class="paper-title">${escapeHtml(paper.title)}</div>
+          <div class="paper-meta">${meta}</div>
+        </div>
+      </div>`;
+  }
+  list.innerHTML = html;
+  onClickAll(list, ".paper-item", function (item) { selectPaper(item.dataset.id); });
+}
+
+// The user clicked a paper in the list
+async function selectPaper(paperId) {
+  app.activePaperId = paperId;
+  localStorage.setItem(KEY_ACTIVE_PAPER, paperId);
+  renderPapers();
+
+  const paper = getActivePaper();
+  setText("pdfTitle", paper.title);
+  loadPdfInViewer(paper);
+  await loadChatHistory();
+
+  // if a tab that depends on the paper is open, show it again for the new paper
+  const tab = getActiveTabName();
+  if (tab === "insights" || tab === "prerequisites" || tab === "summary") {
+    switchTab(tab);
+  }
+
+  if (isIndexing(paper)) {
+    showProgressBar(paper.indexPct, paper.indexMessage || paper.indexStep || "Indexing...");
+  } else {
+    hideProgressBar();
+  }
+}
+
+// Get all papers from the server when the page opens
+async function loadPapers() {
+  const data = await getJson("/api/papers");
+  app.papers = data.papers || [];
+
+  const savedId = localStorage.getItem(KEY_ACTIVE_PAPER);
+  if (findPaper(savedId)) {
+    app.activePaperId = savedId;
+  } else if (app.papers.length > 0) {
+    app.activePaperId = app.papers[0].id;
+  }
+
+  for (const paper of app.papers) {
+    if (isIndexing(paper)) {
+      startIndexPolling(paper);
+    }
+  }
+
+  renderPapers();
+  const active = getActivePaper();
+  setText("pdfTitle", active ? active.title : "Select a paper to view");
+  await loadPdfInViewer(active);
+  await loadChatHistory();
+}
+
+// The small bar that shows how far indexing is
+function showProgressBar(percent, message) {
+  byId("indexProgress").style.display = "block";
+  byId("indexFill").style.width = percent + "%";
+  setText("indexLabel", message || "");
+}
+
+function hideProgressBar() {
+  byId("indexProgress").style.display = "none";
+}
+
+// Every 2 seconds ask the server if the paper is ready
+function startIndexPolling(paper) {
+  const key = paper.collectionName;
+  if (app.pollers[key]) {
+    return;
+  }
+
+  function stop() {
+    clearInterval(app.pollers[key]);
+    delete app.pollers[key];
+    hideProgressBar();
+  }
+
+  app.pollers[key] = setInterval(async function () {
+    try {
+      const info = await getJson("/api/status/" + paper.path);
+      const current = findPaper(paper.id);
+      if (current) {
+        current.indexStatus = info.status;
+        current.indexPct = info.pct;
+        current.indexStep = info.step;
+        current.indexMessage = info.message;
+      }
+      renderPapers();
+
+      if (app.activePaperId === paper.id && info.status === "indexing") {
+        showProgressBar(info.pct, info.message || info.step);
+      }
+      if (info.status === "ready") {
+        stop();
+        showToast('"' + paper.title + '" is ready!');
+      } else if (info.status === "error") {
+        stop();
+        showToast('Indexing failed for "' + paper.title + '". Try re-uploading.');
+      }
+    } catch (error) {
+      // a network problem: we simply try again in 2 seconds
+    }
+  }, 2000);
+}
+
+// Upload PDF files to the server, one by one
+async function handleFiles(files) {
+  const pdfs = [];
+  for (const file of files) {
+    if (file.name.toLowerCase().endsWith(".pdf")) {
+      pdfs.push(file);
+    }
+  }
+  if (pdfs.length === 0) {
+    showToast("Please upload PDF files only");
+    return;
+  }
+
+  for (const file of pdfs) {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      showToast("Uploading " + file.name + "...");
+      const response = await fetch("/api/upload", { method: "POST", body: formData });
+      const text = await response.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch (error) { data = {}; }
+      if (!response.ok) {
+        throw new Error(data.error || "Upload failed");
+      }
+
+      const newPaper = data.paper;
+      newPaper.indexStatus = "indexing";
+      newPaper.indexPct = 5;
+
+      // remove an older paper with the same title, then put the new one first
+      const others = [];
+      for (const paper of app.papers) {
+        if (paper.title.toLowerCase() !== newPaper.title.toLowerCase()) {
+          others.push(paper);
+        }
+      }
+      app.papers = [newPaper].concat(others);
+      app.activePaperId = newPaper.id;
+      localStorage.setItem(KEY_ACTIVE_PAPER, newPaper.id);
+
+      renderPapers();
+      setText("pdfTitle", newPaper.title);
+      await loadPdfInViewer(newPaper);
+      app.chatLoaded[newPaper.id] = true;
+      app.chats[newPaper.id] = [];
+      renderChat();
+      showProgressBar(5, "Starting...");
+      showToast("Uploaded " + file.name + " - indexing in background...");
+      startIndexPolling(newPaper);
+    } catch (error) {
+      showToast(error.message || "Upload failed");
+    }
+  }
+}
+
+/* ---------- 4. PDF VIEWER ---------- */
+
+// Open a PDF in the side panel
+async function loadPdfInViewer(paper) {
+  const body = byId("pdfBody");
+  body.classList.remove("showing-page");
+
+  if (!paper) {
+    body.innerHTML = PDF_PLACEHOLDER;
+    setText("pageInfo", "0 / 0");
+    app.pdfDoc = null;
+    app.currentPage = 1;
+    app.totalPages = 0;
+    app.pdfZoom = 1;
+    setText("pdfZoomLabel", "100%");
+    return;
+  }
+
+  body.innerHTML = '<div style="color:var(--text3);font-size:12px;padding:20px;">Loading PDF…</div>';
+
+  try {
+    const url = "/uploads/" + paper.path.replace("papers/uploads/", "");
+    app.pdfDoc = await pdfjsLib.getDocument(url).promise;
+    app.totalPages = app.pdfDoc.numPages;
+    app.currentPage = 1;
+    app.pdfZoom = 1;
+    setText("pdfZoomLabel", "100%");
+    setText("pageInfo", "1 / " + app.totalPages);
+    await renderSidebarPage(1);
+  } catch (error) {
+    body.innerHTML = '<div class="red" style="font-size:12px;padding:20px;">Could not load PDF.<br>' + escapeHtml(error.message) + "</div>";
+    app.pdfDoc = null;
+    app.totalPages = 0;
+    setText("pageInfo", "0 / 0");
+  }
+}
+
+// Draw one PDF page into "container": the picture and the selectable text
+async function renderPdfPage(pageNum, container, targetWidth, zoom) {
+  const page = await app.pdfDoc.getPage(pageNum);
+  const pixelRatio = window.devicePixelRatio || 1;
+  const baseWidth = page.getViewport({ scale: 1 }).width;
+  const cssScale = (targetWidth / baseWidth) * zoom;
+  const viewport = page.getViewport({ scale: cssScale });
+  const sharpViewport = page.getViewport({ scale: cssScale * pixelRatio });
+
+  const wrap = document.createElement("div");
+  wrap.className = "pdf-page-wrap";
+  wrap.style.width = viewport.width + "px";
+  wrap.style.height = viewport.height + "px";
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(sharpViewport.width);
+  canvas.height = Math.ceil(sharpViewport.height);
+  canvas.style.width = viewport.width + "px";
+  canvas.style.height = viewport.height + "px";
+  const context = canvas.getContext("2d", { alpha: false });
+  await page.render({ canvasContext: context, viewport: sharpViewport }).promise;
+  wrap.appendChild(canvas);
+
+  buildTextLayer(page, wrap, viewport, container);     // no "await": the picture must not wait for the text
+
+  if (container.textTask) {
+    try { container.textTask.cancel(); } catch (error) { /* it was already finished */ }
+  }
+  container.innerHTML = "";
+  container.appendChild(wrap);
+}
+
+// Draw a page in the side panel
+async function renderSidebarPage(pageNum) {
+  const body = byId("pdfBody");
+  if (!app.pdfDoc) {
+    return;
+  }
+  body.classList.add("showing-page");
+  await renderPdfPage(pageNum, body, body.clientWidth - 16, app.pdfZoom);
+  app.currentPage = pageNum;
+  setText("pageInfo", pageNum + " / " + app.totalPages);
+  setText("pdfZoomLabel", Math.round(app.pdfZoom * 100) + "%");
+}
+
+// Zoom the side panel PDF in or out
+function zoomPdf(change) {
+  if (!app.pdfDoc) {
+    return;
+  }
+  app.pdfZoom = Math.min(4, Math.max(0.5, app.pdfZoom + change));
+  renderSidebarPage(app.currentPage);
+}
+
+// Go to the next (+1) or the previous (-1) page
+function goToPdfPage(change) {
+  if (!app.pdfDoc) {
+    showToast("No PDF loaded");
+    return;
+  }
+  const next = app.currentPage + change;
+  if (next >= 1 && next <= app.totalPages) {
+    renderSidebarPage(next);
+  }
+}
+
+// Put invisible text over the picture, so the user can select words
+async function buildTextLayer(page, wrap, viewport, container) {
+  const layer = document.createElement("div");
+  layer.className = "pdf-text-layer";
+  layer.style.width = viewport.width + "px";
+  layer.style.height = viewport.height + "px";
+  layer.style.setProperty("--scale-factor", String(viewport.scale));
+  wrap.appendChild(layer);
+
+  try {
+    const textContent = await page.getTextContent({ normalizeWhitespace: true });
+    container.textTask = pdfjsLib.renderTextLayer({
+      textContent: textContent,
+      container: layer,
+      viewport: viewport,
+      textDivs: [],
+      enhanceTextSelection: true
+    });
+  } catch (error) {
+    console.warn("Could not build the PDF text layer:", error);
+  }
+}
+
+/* --- the floating popup (used for selected words) --- */
+
+// Open the popup near the point (x, y)
+function openPopupAt(x, y, html) {
+  let popup = byId("explainPopup");
+  if (!popup) {
+    popup = document.createElement("div");
+    popup.id = "explainPopup";
+    popup.className = "explain-popup";
+    document.body.appendChild(popup);
+  }
+  popup.dataset.anchorX = String(x);
+  popup.dataset.anchorY = String(y);
+  popup.innerHTML = html;
+  popup.style.display = "block";
+  popup.style.visibility = "hidden";
+  popup.style.left = "8px";
+  popup.style.top = "8px";
+  requestAnimationFrame(function () {
+    positionPopup(popup);
+    popup.style.visibility = "visible";
+  });
+  return popup;
+}
+
+// Change what the popup shows (and keep it inside the screen)
+function setPopupHtml(popup, html) {
+  popup.innerHTML = html;
+  const closeButton = popup.querySelector(".popup-close");
+  if (closeButton) {
+    closeButton.addEventListener("click", closePopup);
+  }
+  requestAnimationFrame(function () { positionPopup(popup); });
+}
+
+// Put the popup next to the click, but never outside the window
+function positionPopup(popup) {
+  const x = Number(popup.dataset.anchorX);
+  const y = Number(popup.dataset.anchorY);
+  const gap = 10;
+  const margin = 8;
+  const rect = popup.getBoundingClientRect();
+  const screenWidth = document.documentElement.clientWidth;
+  const screenHeight = document.documentElement.clientHeight;
+
+  let left = Math.min(x + gap, screenWidth - rect.width - margin);
+  left = Math.max(margin, left);
+  let top = y + gap;
+  if (top + rect.height > screenHeight - margin) {
+    top = y - rect.height - gap;          // not enough room below: show it above
+  }
+  top = Math.max(margin, top);
+
+  popup.style.left = left + "px";
+  popup.style.top = top + "px";
+}
+
+function closePopup() {
+  const popup = byId("explainPopup");
+  if (popup) {
+    popup.style.display = "none";
+  }
+}
+
+// A popup card with a title and some sections
+function popupCard(title, sections) {
+  return '<div class="popup-card"><div class="popup-card-head"><strong>' + escapeHtml(title) +
+         '</strong><button type="button" class="popup-close">×</button></div>' + sections + "</div>";
+}
+
+function popupSection(label, text) {
+  return '<div class="popup-section"><b>' + label + "</b> " + escapeHtml(text) + "</div>";
+}
+
+/* --- select a word in the PDF, then click "Explain" --- */
+
+// The text the user selected inside the PDF (or null)
+function getSelectedTerm() {
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+    return null;
+  }
+  const range = selection.getRangeAt(0);
+  const startElement = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+  const endElement = range.endContainer.nodeType === 1 ? range.endContainer : range.endContainer.parentElement;
+  const startLayer = startElement ? startElement.closest(".pdf-text-layer") : null;
+  const endLayer = endElement ? endElement.closest(".pdf-text-layer") : null;
+  if (!startLayer || startLayer !== endLayer) {
+    return null;                          // the selection is not inside the PDF
+  }
+  const term = selection.toString().replace(/\s+/g, " ").trim();
+  if (!term || term.length > 500 || term.split(" ").length > 40) {
+    return null;
+  }
+  return term;
+}
+
+// Show a small "Explain ..." button near the selected text
+function showExplainButton(term, x, y) {
+  const popup = openPopupAt(x, y, '<button type="button" class="popup-trigger">Explain "' + escapeHtml(term) + '"</button>');
+  popup.querySelector(".popup-trigger").addEventListener("click", function () {
+    explainSelectedTerm(term, popup);
+  });
+}
+
+// Ask the server to explain the selected term
+async function explainSelectedTerm(term, popup) {
+  const paper = getActivePaper();
+  if (!paper) {
+    showToast("Select a paper first");
+    return;
+  }
+  setPopupHtml(popup, '<div class="popup-loading">Explaining "' + escapeHtml(term) + '"…</div>');
+  try {
+    const data = await postJson("/api/explain", { term: term, paper_path: paper.path });
+    clearSavedResults();
+    const example = (data.real_world_example || "").replace(/^example\s*:\s*/i, "");
+    let sections = popupSection("From paper:", data.from_paper || "Not explained in the retrieved paper context.");
+    sections += popupSection("Simple:", data.simple_explanation || "No simple explanation was returned.");
+    if (example) {
+      sections += popupSection("Example:", example);
+    }
+    setPopupHtml(popup, popupCard(data.term || "Explanation", sections));
+    showToast('"' + term + '" saved to Memory.');
+  } catch (error) {
+    setPopupHtml(popup, '<div class="popup-error">' + escapeHtml(error.message || "Failed to explain") + "</div>");
+  }
+}
+
+// Start listening for text selection, and for clicks outside the popup
+function setupPdfSelection() {
+  document.addEventListener("mouseup", function (event) {
+    if (!event.target.closest || !event.target.closest(".pdf-text-layer")) {
+      return;
+    }
+    setTimeout(function () {              // wait a moment, so the browser finishes selecting
+      const term = getSelectedTerm();
+      if (term) {
+        showExplainButton(term, event.clientX, event.clientY);
+      }
+    }, 0);
+  });
+
+  document.addEventListener("mousedown", function (event) {
+    const popup = byId("explainPopup");
+    if (popup && popup.style.display === "block" && !popup.contains(event.target)) {
+      closePopup();
+    }
+  });
+}
+
+/* --- fullscreen PDF --- */
+
+async function openFullscreen() {
+  if (!app.pdfDoc) {
+    showToast("No PDF loaded");
+    return;
+  }
+  app.fsPage = app.currentPage;
+  app.fsZoom = 1;
+  const paper = getActivePaper();
+  if (paper) {
+    setText("pdfFullscreenTitle", paper.title);
+  }
+  byId("pdfFullscreenOverlay").classList.add("open");
+  document.body.style.overflow = "hidden";
+  document.addEventListener("keydown", handleFullscreenKey);
+  try {
+    await renderFullscreenPage(app.fsPage);
+  } catch (error) {
+    showToast("Could not draw the fullscreen page.");
+  }
+}
+
+function closeFullscreen() {
+  byId("pdfFullscreenOverlay").classList.remove("open");
+  document.body.style.overflow = "";
+  document.removeEventListener("keydown", handleFullscreenKey);
+  closePopup();
+}
+
+// Esc closes it, the arrow keys change the page
+function handleFullscreenKey(event) {
+  if (event.key === "Escape") { closeFullscreen(); }
+  if (event.key === "ArrowRight") { changeFullscreenPage(1); }
+  if (event.key === "ArrowLeft") { changeFullscreenPage(-1); }
+}
+
+async function renderFullscreenPage(pageNum) {
+  const width = Math.max(320, Math.floor(window.innerWidth * 0.9));
+  await renderPdfPage(pageNum, byId("pdfFullscreenBody"), width, app.fsZoom);
+  app.fsPage = pageNum;
+  setText("pdfFsPageInfo", pageNum + " / " + app.totalPages);
+  setText("pdfFsZoomLabel", Math.round(app.fsZoom * 100) + "%");
+}
+
+function changeFullscreenPage(change) {
+  const next = app.fsPage + change;
+  if (next >= 1 && next <= app.totalPages) {
+    renderFullscreenPage(next);
+  }
+}
+
+function zoomFullscreen(change) {
+  app.fsZoom = Math.min(4, Math.max(0.5, app.fsZoom + change));
+  renderFullscreenPage(app.fsPage);
+}
+
+/* ---------- 5. CHAT ---------- */
+
+// Turn simple markdown (**bold**, lists, # headings) into HTML
+function formatMessageText(raw) {
+  if (!raw) {
+    return "";
+  }
+  const lines = escapeHtml(raw.trim()).split("\n");
+  let html = "";
+  let listItems = [];
+  let listTag = "";
+  let paragraph = [];
+
+  function bold(text) {
+    return text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  }
+  function finishList() {
+    if (listItems.length > 0) {
+      html += "<" + listTag + ">";
+      for (const item of listItems) { html += "<li>" + item + "</li>"; }
+      html += "</" + listTag + ">";
+    }
+    listItems = [];
+    listTag = "";
+  }
+  function finishParagraph() {
+    if (paragraph.length > 0) {
+      html += "<p>" + paragraph.join("<br>") + "</p>";
+    }
+    paragraph = [];
+  }
+  function addListItem(tag, text) {
+    finishParagraph();
+    if (listTag !== tag) { finishList(); }
+    listTag = tag;
+    listItems.push(bold(text));
+  }
+
+  for (const line of lines) {
+    const text = line.trim();
+    const heading = text.match(/^#{1,3}\s+(.*)/);
+    const numbered = text.match(/^\d+[.)]\s+(.*)/);
+    const bullet = text.match(/^[-*]\s+(.*)/);
+
+    if (text === "") {
+      finishList();
+      finishParagraph();
+    } else if (heading) {
+      finishList();
+      finishParagraph();
+      html += '<h4 class="msg-heading">' + bold(heading[1]) + "</h4>";
+    } else if (numbered) {
+      addListItem("ol", numbered[1]);
+    } else if (bullet) {
+      addListItem("ul", bullet[1]);
+    } else {
+      finishList();
+      paragraph.push(bold(text));
+    }
+  }
+  finishList();
+  finishParagraph();
+  return html;
+}
+
+// Make one chat bubble ("role" is "user" or "assistant")
+function createMessage(role, text) {
+  const message = document.createElement("div");
+  message.className = "msg " + role;
+
+  if (role === "user") {
+    message.innerHTML = '<div class="msg-body"><div class="msg-bubble"></div></div><div class="msg-avatar">U</div>';
+    message.querySelector(".msg-bubble").textContent = text;
+  } else {
+    message.innerHTML = `<div class="msg-avatar">PM</div>
+      <div class="msg-body">
+        <div class="msg-bubble">${formatMessageText(text)}</div>
+        <div class="msg-actions"><button type="button" class="small-btn">Copy</button></div>
+      </div>`;
+    message.querySelector("button").addEventListener("click", function () { copyText(text); });
+  }
+  return message;
+}
+
+// Draw the whole chat of the selected paper
+function renderChat() {
+  const area = byId("chatArea");
+  const thinking = byId("thinkingMsg");
+
+  const oldMessages = area.querySelectorAll(".msg");
+  for (let i = 0; i < oldMessages.length; i++) {
+    oldMessages[i].remove();
+  }
+  thinking.style.display = "none";
+
+  const paper = getActivePaper();
+  if (paper) {
+    const history = app.chats[paper.id] || [];
+    for (const item of history) {
+      area.insertBefore(createMessage(item.role, item.text), thinking);
+    }
+  }
+  area.scrollTop = area.scrollHeight;
+}
+
+// Get the saved chat of the selected paper from the server (only once per paper)
+async function loadChatHistory() {
+  const paper = getActivePaper();
+  if (!paper) {
+    renderChat();
+    return;
+  }
+  if (!app.chatLoaded[paper.id]) {
+    try {
+      const data = await getJson("/api/chat-history/" + paper.path);
+      app.chats[paper.id] = data.history || [];
+    } catch (error) {
+      app.chats[paper.id] = [];
+    }
+    app.chatLoaded[paper.id] = true;
+  }
+  renderChat();
+}
+
+// Add one message to the chat of a paper
+function addChatMessage(paperId, role, text) {
+  if (!app.chats[paperId]) {
+    app.chats[paperId] = [];
+  }
+  app.chats[paperId].push({ role: role, text: text });
+
+  if (app.activePaperId !== paperId) {
+    return;
+  }
+  const area = byId("chatArea");
+  area.insertBefore(createMessage(role, text), byId("thinkingMsg"));
+  area.scrollTop = area.scrollHeight;
+}
+
+// Send the question and show the answer
+async function sendMessage() {
+  if (app.thinking) {
+    return;
+  }
+  const input = byId("chatInput");
+  const thinking = byId("thinkingMsg");
+  const paper = getActivePaper();
+  const message = input.value.trim();
+
+  if (!message) { return; }
+  if (!paper) { showToast("Upload or select a paper first"); return; }
+  if (isIndexing(paper)) { showToast("Paper is still being indexed. Please wait."); return; }
+
+  addChatMessage(paper.id, "user", message);
+  input.value = "";
+  thinking.style.display = "flex";
+  byId("chatArea").scrollTop = byId("chatArea").scrollHeight;
+  app.thinking = true;
+
+  try {
+    const data = await postJson("/api/chat", { message: message, paper_path: paper.path });
+    thinking.style.display = "none";
+    addChatMessage(paper.id, "assistant", data.reply || "No response returned.");
+  } catch (error) {
+    thinking.style.display = "none";
+    addChatMessage(paper.id, "assistant", error.message || "Error: Could not get a response");
+  }
+  app.thinking = false;
+}
+
+// Enter sends the message. Shift+Enter makes a new line.
+function handleChatKey(event) {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    sendMessage();
+  }
+}
+
+/* ---------- 6. INSIGHTS TAB (difficulty score) ---------- */
+
+// Learned terms change the scores, so forget the saved Insights and Prerequisites
+function clearSavedResults() {
+  app.insights = {};
+  app.prereqs = {};
+}
+
+// Draw the difficulty score page
+function renderInsights(analysis) {
+  const panel = byId("insightsContent");
+  if (!analysis || !analysis.final_score) {
+    showMessage(panel, "⏳", "Analyzing...", "Computing difficulty analysis.");
+    return;
+  }
+
+  const score = analysis.final_score;
+  const label = analysis.difficulty_label || "";
+  const scores = analysis.scores || {};
+  const weights = analysis.weights || {};
+  const breakdown = analysis.breakdown || {};
+  const color = LABEL_COLORS[label] || "var(--accent)";
+
+  // a green banner when your learned terms made the score lower
+  let banner = "";
+  const p = analysis.personalization;
+  if (p && (p.known_terms_matched > 0 || p.prereqs_known > 0)) {
+    const parts = [];
+    if (p.known_terms_matched > 0) { parts.push(p.known_terms_matched + " of " + p.total_technical_terms + " technical terms"); }
+    if (p.prereqs_known > 0) { parts.push(p.prereqs_known + " of " + p.total_prereqs + " prerequisites"); }
+    let change = "";
+    if (typeof p.base_final_score === "number") {
+      change = " Score lowered from <strong>" + p.base_final_score.toFixed(1) + "</strong> to <strong>" + score.toFixed(1) + "</strong>.";
+    }
+    banner = '<div class="note note-green">🧠 Personalized for you: you already know ' + parts.join(" and ") + "." + change + "</div>";
+  }
+
+  // the big score and the ring
+  const percent = Math.round((score / 10) * 100);
+  const circle = 2 * Math.PI * 36;
+  const offset = circle - (percent / 100) * circle;
+  const hero = `
+    <div class="card hero-card">
+      <div>
+        <div class="tiny-label">Difficulty Score</div>
+        <div class="big-score">${score.toFixed(1)}<span> / 10</span></div>
+        <span class="pill" style="${pillStyle(color)}">${escapeHtml(label || "Unknown")}</span>
+      </div>
+      <svg width="90" height="90" viewBox="0 0 90 90">
+        <circle cx="45" cy="45" r="36" fill="none" stroke="var(--surface2)" stroke-width="8"/>
+        <circle cx="45" cy="45" r="36" fill="none" stroke="var(--accent)" stroke-width="8"
+          stroke-dasharray="${circle.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}"
+          stroke-linecap="round" transform="rotate(-90 45 45)"/>
+        <text x="45" y="50" text-anchor="middle" class="ring-text">${percent}%</text>
+      </svg>
+    </div>`;
+
+  // the four small scores
+  const components = [
+    { key: "readability", icon: "📖", name: "Readability" },
+    { key: "uncommon_words", icon: "🔤", name: "Uncommon Words" },
+    { key: "technical_terms", icon: "🔬", name: "Technical Terms" },
+    { key: "llm_perception", icon: "🤖", name: "LLM Perception" }
+  ];
+  let rows = "";
+  for (const item of components) {
+    const value = scores[item.key];
+    let weight = "";
+    if (typeof weights[item.key] === "number") {
+      weight = Math.round(weights[item.key] * 100) + "%";
+    }
+    const hasValue = value !== undefined;
+    const valueText = hasValue ? Number(value).toFixed(1) + " / 10" : "N/A";
+    const width = hasValue ? Math.round((Number(value) / 10) * 100) : 0;
+    rows += `<div class="comp-row">
+      <div class="comp-head"><span>${item.icon} ${item.name} <small>(weight ${weight})</small></span><b>${valueText}</b></div>
+      <div class="bar"><div class="bar-fill" style="width:${width}%"></div></div></div>`;
+  }
+
+  // paper statistics
+  let uncommonText = null;
+  if (breakdown.uncommon_word_pct !== undefined && breakdown.uncommon_word_pct !== null) {
+    uncommonText = breakdown.uncommon_word_pct + "%";
+  }
+  const stats = [
+    ["Total Sentences", breakdown.total_sentences],
+    ["Total Words", breakdown.total_words],
+    ["Uncommon Word %", uncommonText],
+    ["Tech Keyphrases", breakdown.technical_keyphrases],
+    ["FK Grade", breakdown.flesch_kincaid_grade],
+    ["Reading Ease", breakdown.flesch_reading_ease]
+  ];
+  let statCells = "";
+  for (const stat of stats) {
+    const value = (stat[1] === null || stat[1] === undefined) ? "N/A" : stat[1];
+    statCells += '<div class="stat"><div class="tiny-label">' + stat[0] + '</div><div class="stat-value">' + value + "</div></div>";
+  }
+
+  panel.innerHTML = banner + hero +
+    '<div class="card"><div class="card-title">Component Scores</div>' + rows + "</div>" +
+    '<div class="card"><div class="card-title">Paper Statistics</div><div class="stat-grid">' + statCells + "</div></div>";
+}
+
+// Get the score from the server (or from memory) and show it
+async function loadInsightsTab() {
+  const panel = byId("insightsContent");
+  const paper = getActivePaper();
+
+  if (!paper) { showMessage(panel, "📄", "No Paper Selected", "Upload or select a paper."); return; }
+  if (app.insights[paper.id]) { renderInsights(app.insights[paper.id]); return; }
+  if (isIndexing(paper)) {
+    showMessage(panel, "⏳", "Indexing in progress...", "Wait for the green dot, then click Insights again.");
+    return;
+  }
+
+  showMessage(panel, "⏳", "Analyzing paper...", "Running difficulty analysis, personalized to what you already know.");
+  try {
+    const data = await postJson("/api/analyze", { paper_path: paper.path });
+    app.insights[paper.id] = data.analysis;
+    const current = getActivePaper();
+    if (current && current.id === paper.id) {
+      renderInsights(data.analysis);
+    }
+  } catch (error) {
+    showMessage(panel, "❌", "Analysis Failed", error.message || "Check your API key.");
+  }
+}
+
+/* ---------- 7. PREREQUISITES TAB (learning roadmap) ---------- */
+
+// Turn the numbered text list into items: { number, concept, explanation }
+function parsePrerequisites(text) {
+  const items = [];
+  const lines = text.trim().split("\n");
+  for (const line of lines) {
+    const match = line.match(/^\s*(\d+)[.)]\s*(.+)/);
+    if (!match) {
+      continue;
+    }
+    const content = match[2].trim();
+    const colon = content.indexOf(":");
+    if (colon === -1) {
+      items.push({ number: match[1], concept: content, explanation: "" });
+    } else {
+      items.push({ number: match[1], concept: content.slice(0, colon).trim(), explanation: content.slice(colon + 1).trim() });
+    }
+  }
+  return items;
+}
+
+// Draw the learning roadmap
+function renderPrerequisites(text) {
+  const panel = byId("prerequisitesContent");
+
+  if (!text || !text.trim()) {
+    showMessage(panel, "🎉", "Nothing Left To Learn", "You already know every prerequisite for this paper. Nice work.");
+    return;
+  }
+  const items = parsePrerequisites(text);
+  if (items.length === 0) {
+    panel.innerHTML = '<div class="card" style="white-space:pre-wrap;color:var(--text2);">' + escapeHtml(text) + "</div>";
+    return;
+  }
+
+  let html = `<div class="note note-accent">
+    <div class="note-title">🎓 Learning Roadmap</div>
+    <div style="color:var(--text2);margin-top:2px;">Click any topic to get an instant explanation. Topics you already learned are hidden automatically.</div></div>`;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    let color = "var(--red)";                       // the last third is "Advanced"
+    if (i < items.length * 0.33) { color = "var(--green)"; }
+    else if (i < items.length * 0.66) { color = "var(--amber)"; }
+    let description = "";
+    if (item.explanation) {
+      description = '<div class="prereq-desc">' + escapeHtml(item.explanation) + "</div>";
+    }
+    html += `<div class="prereq-card" data-concept="${escapeHtml(item.concept)}" style="border-left-color:${color};">
+      <div class="prereq-badge">${escapeHtml(item.number)}</div>
+      <div class="prereq-body">
+        <div class="prereq-head"><div class="prereq-name">${escapeHtml(item.concept)}</div><span class="prereq-chip">Explain →</span></div>
+        ${description}
+      </div></div>`;
+  }
+
+  html += `<div class="legend">
+    <span><i style="background:var(--green)"></i>Foundational</span>
+    <span><i style="background:var(--amber)"></i>Intermediate</span>
+    <span><i style="background:var(--red)"></i>Advanced</span>
+    <span style="margin-left:auto;">👆 Click any topic to explain it</span></div>`;
+
+  panel.innerHTML = html;
+  onClickAll(panel, ".prereq-card", function (card) { openExplainFor(card.dataset.concept); });
+}
+
+// Get the roadmap from the server (or from memory) and show it
+async function loadPrerequisitesTab() {
+  const panel = byId("prerequisitesContent");
+  const paper = getActivePaper();
+
+  if (!paper) { showMessage(panel, "📚", "No Paper Selected", "Upload or select a paper."); return; }
+  if (app.prereqs[paper.id] !== undefined) { renderPrerequisites(app.prereqs[paper.id]); return; }
+  if (isIndexing(paper)) {
+    showMessage(panel, "⏳", "Indexing in progress...", "Wait for the green dot, then click Prerequisites again.");
+    return;
+  }
+
+  showMessage(panel, "⏳", "Extracting Prerequisites...", "Building your personalized learning roadmap.");
+  try {
+    const data = await postJson("/api/prerequisites", { paper_path: paper.path });
+    app.prereqs[paper.id] = data.prerequisites || "";
+    const current = getActivePaper();
+    if (current && current.id === paper.id) {
+      renderPrerequisites(app.prereqs[paper.id]);
+    }
+  } catch (error) {
+    showMessage(panel, "❌", "Extraction Failed", error.message || "Check your API key.");
+  }
+}
+
+/* ---------- 8. EXPLAIN TAB ---------- */
+
+// Jump to the Explain tab with a term typed in, then explain it
+function openExplainFor(term) {
+  switchTab("explain");
+  setTimeout(function () {
+    byId("explainInput").value = term;
+    explainTerm();
+  }, 80);
+}
+
+// The friendly loading steps: how far (%), the text, and how long to wait before the next step (ms)
+const EXPLAIN_STEPS = [
+  { percent: 15, label: "Retrieving relevant sections from paper…", wait: 400 },
+  { percent: 35, label: "Sending context to Gemini…", wait: 1200 },
+  { percent: 55, label: "Gemini is reading the paper…", wait: 3000 },
+  { percent: 75, label: "Generating explanation…", wait: 6000 },
+  { percent: 90, label: "Preparing your answer…", wait: 10000 },
+  { percent: 95, label: "Waiting for Gemini response…", wait: 0 }
+];
+
+// Make the loading bar move. Returns a function that stops it.
+function startExplainProgress() {
+  let step = 0;
+  let stopped = false;
+
+  function show(percent, label) {
+    const fill = byId("explainFill");
+    if (fill) { fill.style.width = percent + "%"; }
+    setText("explainPct", percent + "%");
+    setText("explainLabel", label);
+  }
+  function next() {
+    if (stopped || step >= EXPLAIN_STEPS.length) {
+      return;
+    }
+    const current = EXPLAIN_STEPS[step];
+    step++;
+    show(current.percent, current.label);
+    if (current.wait > 0) {
+      setTimeout(next, current.wait);
+    }
+  }
+
+  next();
+  return function stop() {
+    stopped = true;
+    show(100, "Done!");
+  };
+}
+
+// Ask the server to explain the term typed in the box
+async function explainTerm() {
+  const input = byId("explainInput");
+  const panel = byId("explainContent");
+  const paper = getActivePaper();
+  const term = input.value.trim();
+
+  if (!term) { showToast("Please type a term to explain"); return; }
+  if (!paper) { showToast("Upload or select a paper first"); return; }
+  if (isIndexing(paper)) { showToast("Paper is still being indexed."); return; }
+
+  const key = paper.id + "::" + term.toLowerCase();
+  if (app.explained[key]) {
+    renderExplainResult(app.explained[key]);
+    return;
+  }
+
+  panel.innerHTML = `
+    <div class="card" style="padding:28px 24px;">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+        <div style="font-weight:600;">Explaining <span style="color:var(--accent);">"${escapeHtml(term)}"</span></div>
+        <div id="explainPct" style="font-weight:600;color:var(--accent);">0%</div>
+      </div>
+      <div class="bar"><div class="bar-fill" id="explainFill" style="width:0%"></div></div>
+      <div class="small-label" id="explainLabel" style="margin-bottom:18px;">Starting…</div>
+      <div class="skeleton"><div class="tiny-label" style="margin-bottom:9px;">📄 From This Paper</div><div class="shimmer" style="width:82%"></div><div class="shimmer" style="width:65%"></div></div>
+      <div class="skeleton"><div class="tiny-label" style="margin-bottom:9px;">💡 In Simple Words</div><div class="shimmer" style="width:82%"></div><div class="shimmer" style="width:65%"></div></div>
+      <div class="skeleton"><div class="tiny-label" style="margin-bottom:9px;">🌍 Real-World Example</div><div class="shimmer" style="width:82%"></div><div class="shimmer" style="width:65%"></div></div>
+    </div>`;
+  const stopProgress = startExplainProgress();
+
+  try {
+    const data = await postJson("/api/explain", { term: term, paper_path: paper.path });
+    stopProgress();
+    app.explained[key] = data;
+    renderExplainResult(data);
+    clearSavedResults();           // the server saved this term in Memory, so the scores change
+    showToast('"' + term + '" saved to Memory. Prerequisites and Difficulty Score will drop.');
+  } catch (error) {
+    stopProgress();
+    showMessage(panel, "❌", "Explanation Failed", error.message || "Check your API key.");
+  }
+}
+
+// Draw the explanation
+function renderExplainResult(data) {
+  const panel = byId("explainContent");
+
+  let badgeColor = "var(--amber)";
+  let badgeText = "Not in paper. Using general knowledge";
+  if (data.found_in_paper) {
+    badgeColor = "var(--green)";
+    badgeText = "Found in paper (" + data.chunks_used + (data.chunks_used === 1 ? " section)" : " sections)");
+  }
+
+  let exampleCard = "";
+  if (data.real_world_example) {
+    const example = data.real_world_example.replace(/^example\s*:\s*/i, "").trim();
+    exampleCard = `<div class="card explain-card amber">
+      <div class="explain-card-title">🌍 Real-World Example</div>
+      <div class="explain-card-text">"${escapeHtml(example)}"</div></div>`;
+  }
+
+  const term = data.term.charAt(0).toUpperCase() + data.term.slice(1);
+  panel.innerHTML = `
+    <span class="explain-badge" style="${pillStyle(badgeColor)}">${escapeHtml(badgeText)}</span>
+    <div class="explain-term">${escapeHtml(term)}</div>
+    <div class="card explain-card"><div class="explain-card-title">📄 From This Paper</div><div class="explain-card-text">${escapeHtml(data.from_paper)}</div></div>
+    <div class="card explain-card green"><div class="explain-card-title">💡 In Simple Words</div><div class="explain-card-text">${escapeHtml(data.simple_explanation)}</div></div>
+    ${exampleCard}
+    <div class="explain-hint">Type another term above and click Explain to look it up.</div>`;
+}
+
+// Enter starts the explanation
+function handleExplainKey(event) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    explainTerm();
+  }
+}
+
+/* ---------- 9. SUMMARY TAB ---------- */
+
+// The 5 summary cards: the name in the data, an icon, the title, and a color
+const SUMMARY_CARDS = [
+  { key: "about", icon: "📌", title: "What is this paper about?", tone: "blue" },
+  { key: "problem", icon: "❓", title: "What problem does it solve?", tone: "amber" },
+  { key: "did", icon: "🛠️", title: "What did they do?", tone: "purple" },
+  { key: "results", icon: "📈", title: "What were the results?", tone: "green" },
+  { key: "limits", icon: "⚠️", title: "Limits and conclusion", tone: "red" }
+];
+
+// "94" and "%" -> "94%"      "20" and "ms" -> "20 ms"
+function withUnit(value, unit) {
+  if (unit === "%") { return value + "%"; }
+  if (unit) { return value + " " + unit; }
+  return value;
+}
+
+// The whole summary as plain text (for the "Copy notes" button)
+function summaryPlainText(paper, summary, mode) {
+  const lines = [paper.title, ""];
+  for (const card of SUMMARY_CARDS) {
+    lines.push(card.title);
+    lines.push(summary[card.key][mode]);
+    if (card.key === "results") {
+      for (const c of summary.comparisons) {
+        lines.push("- " + c.metric + ": " + c.old_label + " " + withUnit(c.old, c.unit) + " -> " +
+                   c.new_label + " " + withUnit(c.new, c.unit) + " (" + c.change_abs + ")");
+      }
+      for (const n of summary.key_numbers) {
+        lines.push("- " + (n.label ? n.label + ": " : "") + n.value);
+      }
+    }
+    lines.push("");
+  }
+  return lines.join("\n").trim();
+}
+
+// One "old number -> new number" row with two bars
+function comparisonRowHtml(c) {
+  let tone = "neutral";
+  if (c.good === true) { tone = "good"; }
+  if (c.good === false) { tone = "bad"; }
+  let arrow = "=";
+  if (c.direction === "up") { arrow = "↑"; }
+  if (c.direction === "down") { arrow = "↓"; }
+  let percentText = "";
+  if (c.change_pct !== null && c.change_pct !== undefined) {
+    percentText = " (" + (c.change_pct > 0 ? "+" : "") + c.change_pct + "%)";
+  }
+
+  return `<div class="sum-compare">
+    <div class="sum-compare-metric">${escapeHtml(c.metric)}</div>
+    <div class="sum-compare-vals">
+      <div><div class="sum-compare-label">${escapeHtml(c.old_label)}</div><div class="sum-compare-num">${escapeHtml(withUnit(c.old, c.unit))}</div></div>
+      <div class="sum-arrow">→</div>
+      <div><div class="sum-compare-label">${escapeHtml(c.new_label)}</div><div class="sum-compare-num">${escapeHtml(withUnit(c.new, c.unit))}</div></div>
+      <div class="sum-change ${tone}">${arrow} ${escapeHtml(c.change_abs)}${percentText}</div>
+    </div>
+    <div class="sum-bars">
+      <div class="bar"><div class="bar-fill old" style="width:${c.bar_old}%"></div></div>
+      <div class="bar"><div class="bar-fill ${tone}" style="width:${c.bar_new}%"></div></div>
+    </div></div>`;
+}
+
+// The big number tiles
+function keyNumbersHtml(numbers) {
+  let html = '<div class="sum-numbers">';
+  for (const n of numbers) {
+    let label = "";
+    if (n.label) {
+      label = '<div class="sum-number-label">' + escapeHtml(n.label) + "</div>";
+    }
+    html += '<div class="sum-number"><div class="sum-number-value">' + escapeHtml(n.value) + "</div>" + label + "</div>";
+  }
+  return html + "</div>";
+}
+
+// Draw the summary
+function renderSummary(paper) {
+  const panel = byId("summaryContent");
+  const summary = app.summaries[paper.id];
+  if (!summary) {
+    return;
+  }
+  const mode = app.summaryMode;
+
+  let html = `
+    <div class="sum-head">
+      <div class="sum-title">${escapeHtml(paper.title)}</div>
+      <div class="sum-bar-row">
+        <div class="sum-toggle">
+          <button type="button" data-mode="short" class="${mode === "short" ? "active" : ""}">Short</button>
+          <button type="button" data-mode="detailed" class="${mode === "detailed" ? "active" : ""}">Detailed</button>
+        </div>
+        <div class="sum-actions">
+          <button type="button" class="pill-btn" id="sumCopyBtn">Copy notes</button>
+          <button type="button" class="pill-btn" id="sumRegenBtn">↻ Regenerate</button>
+        </div>
+      </div>
+    </div>`;
+
+  for (let i = 0; i < SUMMARY_CARDS.length; i++) {
+    const card = SUMMARY_CARDS[i];
+    let extra = "";
+    let extraClass = "";
+    if (card.key === "results") {
+      extraClass = " is-results";
+      for (const c of summary.comparisons) { extra += comparisonRowHtml(c); }
+      if (summary.key_numbers.length > 0) { extra += keyNumbersHtml(summary.key_numbers); }
+    }
+    html += `
+      <div class="sum-card tone-${card.tone}${extraClass}">
+        <div class="sum-card-head">
+          <span class="sum-card-icon">${card.icon}</span>
+          <span class="sum-card-title">${i + 1}. ${card.title}</span>
+        </div>
+        <div class="sum-text">${escapeHtml(summary[card.key][mode])}</div>
+        ${extra}
+      </div>`;
+  }
+
+  panel.innerHTML = html;
+  onClickAll(panel, ".sum-toggle button", function (button) {
+    app.summaryMode = button.dataset.mode;
+    renderSummary(paper);
+  });
+  byId("sumCopyBtn").addEventListener("click", function () { copyText(summaryPlainText(paper, summary, mode)); });
+  byId("sumRegenBtn").addEventListener("click", function () { loadSummaryTab(true); });
+}
+
+// Get the summary from the server (or from memory) and show it
+async function loadSummaryTab(force) {
+  const panel = byId("summaryContent");
+  const paper = getActivePaper();
+
+  if (!paper) { showMessage(panel, "📝", "No Paper Selected", "Upload or select a paper."); return; }
+  if (!force && app.summaries[paper.id]) { renderSummary(paper); return; }
+
+  showMessage(panel, "⏳", "Summarizing paper...", "Gemini is reading the paper. This takes 10 to 25 seconds, and only once per paper.");
+  try {
+    const data = await postJson("/api/summary", { paper_path: paper.path, force: force });
+    app.summaries[paper.id] = data.summary;
+    const current = getActivePaper();
+    if (getActiveTabName() === "summary" && current && current.id === paper.id) {
+      renderSummary(paper);
+    }
+  } catch (error) {
+    showMessage(panel, "❌", "Summary Failed", error.message || "Check your API key.");
+  }
+}
+
+/* ---------- 10. WINDOWS (Memory + API key) ---------- */
+
+function showWindow(id, show) {
+  byId(id).style.display = show ? "flex" : "none";
+}
+
+function toggleSettingsMenu(event) {
+  event.stopPropagation();
+  const menu = byId("settingsDropdown");
+  menu.style.display = menu.style.display === "block" ? "none" : "block";
+}
+
+function closeSettingsMenu() {
+  byId("settingsDropdown").style.display = "none";
+}
+
+/* --- Memory window --- */
+
+async function openMemoryModal() {
+  closeSettingsMenu();
+  showWindow("memoryModalOverlay", true);
+  await loadKnownTerms();
+}
+
+function closeMemoryModal() {
+  showWindow("memoryModalOverlay", false);
+  const tab = getActiveTabName();                    // refresh the tabs that depend on Memory
+  if (tab === "insights" || tab === "prerequisites") {
+    switchTab(tab);
+  }
+}
+
+async function loadKnownTerms() {
+  try {
+    const data = await getJson("/api/known-terms");
+    app.knownTerms = data.terms || [];
+  } catch (error) {
+    app.knownTerms = [];
+  }
+  renderMemoryModal();
+}
+
+// Draw the list of learned terms
+function renderMemoryModal() {
+  const grid = byId("memoryTermsGrid");
+  const count = app.knownTerms.length;
+
+  setText("memoryCount", count + (count === 1 ? " term learned" : " terms learned"));
+  byId("memoryClearAllBtn").style.display = count > 0 ? "inline-flex" : "none";
+  grid.style.display = count > 0 ? "grid" : "none";
+  byId("memoryEmptyState").style.display = count > 0 ? "none" : "flex";
+
+  let html = "";
+  for (const term of app.knownTerms) {
+    html += '<div class="memory-term"><span title="' + escapeHtml(term) + '">' + escapeHtml(term) +
+            '</span><button type="button" data-term="' + escapeHtml(term) + '" title="Forget this term">🗑</button></div>';
+  }
+  grid.innerHTML = html;
+  onClickAll(grid, "button", function (button) { deleteKnownTerm(button.dataset.term); });
+}
+
+async function deleteKnownTerm(term) {
+  const answer = prompt('This cannot be undone. Type DELETE to permanently forget "' + term + '":');
+  if (answer !== "DELETE") {
+    showToast("Cancelled. Nothing deleted.");
+    return;
+  }
+  try {
+    await postJson("/api/known-terms/delete", { term: term });
+    const remaining = [];
+    for (const t of app.knownTerms) {
+      if (t.toLowerCase() !== term.toLowerCase()) { remaining.push(t); }
+    }
+    app.knownTerms = remaining;
+    renderMemoryModal();
+    clearSavedResults();
+    showToast('Forgot "' + term + '". Prerequisites and Difficulty Score updated.');
+  } catch (error) {
+    showToast(error.message || "Failed to delete");
+  }
+}
+
+async function deleteAllKnownTerms() {
+  if (app.knownTerms.length === 0) {
+    showToast("Nothing to forget yet");
+    return;
+  }
+  const answer = prompt("This will erase ALL " + app.knownTerms.length + " learned terms and cannot be undone. Type DELETE ALL to confirm:");
+  if (answer !== "DELETE ALL") {
+    showToast("Cancelled. Nothing deleted.");
+    return;
+  }
+  try {
+    await postJson("/api/known-terms/delete-all");
+    app.knownTerms = [];
+    renderMemoryModal();
+    clearSavedResults();
+    showToast("All known terms cleared.");
+  } catch (error) {
+    showToast(error.message || "Failed to delete");
+  }
+}
+
+/* --- API key window --- */
+
+async function openApiKeyModal() {
+  closeSettingsMenu();
+  byId("apiKeyInput").value = "";
+  showWindow("apiKeyModalOverlay", true);
+
+  let text = "Paste your Gemini API key below. It is stored in your account, so you will not need a .env file.";
+  let canRemove = false;
+  try {
+    const data = await getJson("/api/settings");
+    if (data.hasKey) {
+      const source = data.source === "user" ? "saved by you" : "from .env";
+      text = "Current key (" + source + "): " + data.masked + ". Paste a new one below to replace it.";
+      canRemove = data.source === "user";
+    }
+  } catch (error) {
+    // keep the default text
+  }
+  setText("apiKeyModalSub", text);
+  byId("apiKeyRemoveBtn").style.display = canRemove ? "inline-flex" : "none";
+  byId("apiKeyInput").focus();
+}
+
+function closeApiKeyModal() {
+  showWindow("apiKeyModalOverlay", false);
+}
+
+async function saveApiKey() {
+  const key = byId("apiKeyInput").value.trim();
+  if (!key) {
+    showToast("Please paste a key first");
+    return;
+  }
+  try {
+    await postJson("/api/settings/api-key", { api_key: key });
+    showToast("API key saved. It will be used for all Gemini calls from now on.");
+    closeApiKeyModal();
+  } catch (error) {
+    showToast(error.message || "Failed to save key");
+  }
+}
+
+async function removeApiKey() {
+  if (prompt("This cannot be undone. Type DELETE to remove your saved Gemini API key:") !== "DELETE") {
+    showToast("Cancelled. Key not removed.");
+    return;
+  }
+  try {
+    await postJson("/api/settings/api-key/delete");
+    showToast("API key removed. Falling back to .env if one is set there.");
+    closeApiKeyModal();
+  } catch (error) {
+    showToast(error.message || "Failed to remove key");
+  }
+}
+
+/* ---------- 11. TABS AND START ---------- */
+
+// The name of the open tab, for example "chat"
+function getActiveTabName() {
+  return document.querySelector(".tab.active").id.replace("tab-", "");
+}
+
+// Show one tab and hide the others
+function switchTab(name) {
+  for (const tab of TABS) {
+    byId("tab-" + tab).classList.toggle("active", tab === name);
+    byId("panel-" + tab).classList.toggle("active", tab === name);
+  }
+
+  if (name === "summary") { loadSummaryTab(false); }
+  else if (name === "insights") { loadInsightsTab(); }
+  else if (name === "prerequisites") { loadPrerequisitesTab(); }
+}
+
+// The light / dark switch (it is remembered for next time)
+function toggleDark() {
+  app.isDark = !app.isDark;
+  document.body.classList.toggle("dark", app.isDark);
+  setText("darkIcon", app.isDark ? "☀️" : "🌙");
+  localStorage.setItem(KEY_DARK, String(app.isDark));
+}
+
+// The file picker, drag-and-drop, and the button that hides the PDF panel
+function setupUploadButtons() {
+  const fileInput = byId("fileInput");
+  const dropZone = byId("dropZone");
+
+  fileInput.addEventListener("change", function (event) {
+    handleFiles(Array.from(event.target.files));
+    event.target.value = "";
+  });
+
+  dropZone.addEventListener("click", function () { fileInput.click(); });
+  dropZone.addEventListener("dragover", function (event) { event.preventDefault(); dropZone.style.opacity = "0.7"; });
+  dropZone.addEventListener("dragleave", function () { dropZone.style.opacity = "1"; });
+  dropZone.addEventListener("drop", function (event) {
+    event.preventDefault();
+    dropZone.style.opacity = "1";
+    handleFiles(Array.from(event.dataTransfer.files));
+  });
+
+  byId("pdfCloseBtn").addEventListener("click", function () {
+    byId("pdfPanel").style.display = "none";
+    byId("resizeHandle").style.display = "none";
+    showToast("PDF panel hidden");
+  });
+}
+
+// Drag the thin line to make the PDF panel wider or narrower
+function setupResizeHandle() {
+  const handle = byId("resizeHandle");
+  const panel = byId("pdfPanel");
+  let resizing = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  function setWidth(pixels) {
+    panel.style.width = pixels + "px";
+    panel.style.minWidth = pixels + "px";
+  }
+
+  handle.addEventListener("mousedown", function (event) {
+    resizing = true;
+    startX = event.clientX;
+    startWidth = panel.offsetWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  });
+  document.addEventListener("mousemove", function (event) {
+    if (resizing) {
+      setWidth(Math.max(280, Math.min(700, startWidth + (startX - event.clientX))));
+    }
+  });
+  document.addEventListener("mouseup", function () {
+    if (!resizing) { return; }
+    resizing = false;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    localStorage.setItem(KEY_PANEL_WIDTH, String(panel.offsetWidth));
+  });
+
+  const saved = localStorage.getItem(KEY_PANEL_WIDTH);
+  if (saved) {
+    setWidth(saved);
+  }
+}
+
+// Sign out and go to the login page
+async function logout() {
+  try {
+    await fetch("/api/logout", { method: "POST" });
+  } catch (error) {
+    // we go to the login page anyway
+  }
+  window.location.href = "/auth";
+}
+
+// A click outside the Settings menu closes it. Esc closes an open window.
+document.addEventListener("click", function (event) {
+  const menu = byId("settingsDropdown");
+  if (menu.style.display === "block" && !menu.contains(event.target) && !byId("settingsBtn").contains(event.target)) {
+    menu.style.display = "none";
+  }
+});
+document.addEventListener("keydown", function (event) {
+  if (event.key !== "Escape") { return; }
+  if (byId("memoryModalOverlay").style.display === "flex") { closeMemoryModal(); }
+  else if (byId("apiKeyModalOverlay").style.display === "flex") { closeApiKeyModal(); }
+});
+
+// Runs ONE time when the page opens
+async function init() {
+  if (localStorage.getItem(KEY_DARK) === "true") {
+    app.isDark = true;
+    document.body.classList.add("dark");
+    setText("darkIcon", "☀️");
+  }
+  byId("pdfBody").innerHTML = PDF_PLACEHOLDER;
+  setupUploadButtons();
+  setupResizeHandle();
+  setupPdfSelection();
+
+  try {
+    await loadPapers();
+  } catch (error) {
+    showToast(error.message || "Failed to load papers");
+    renderPapers();
+  }
+}
+
+document.addEventListener("DOMContentLoaded", init);
+</script>
 </body>
 </html>

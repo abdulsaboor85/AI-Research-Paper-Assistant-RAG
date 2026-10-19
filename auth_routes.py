@@ -1,27 +1,50 @@
 """
-PATH  ->  auth_routes.py  (project root, next to app.py)
+auth_routes.py  -  sign up, log in and log out.
 
-Flask Blueprint for login / signup / logout routes.
-Register this in app.py with:  app.register_blueprint(auth_bp)
+HOW THIS FILE WORKS (easy words)
+------------------------------------------------------------
+1. SIGN UP:  the browser sends a username, email and password.
+              We save the new user in the database and log them in.
+2. LOG IN:   the browser sends a username (or email) and a password.
+              We check them. If they are right, we remember the user.
+3. "Remember" = we put the user's id in the "session". The session is a small
+   signed cookie in the browser, so every next request knows who the user is.
+4. LOG OUT:  we clear the session.
+
+FUNCTION GUIDE
+------------------------------------------------------------
+   start_session   remember the user as logged in
+   read_field      get a text value from the browser's data
+   auth_page       show the login page (frontend/auth.html)
+   api_signup      create a new account
+   api_login       log in
+   api_logout      log out
 """
 
-import sys
 from pathlib import Path
 
-from flask import Blueprint, jsonify, redirect, request, send_from_directory, session, url_for
-
-BASE_DIR     = Path(__file__).resolve().parent
-FRONTEND_DIR = BASE_DIR / "frontend"
-PIPELINE_DIR = BASE_DIR / "pipeline"
-
-sys.path.insert(0, str(PIPELINE_DIR))
+from flask import Blueprint, jsonify, redirect, request, send_from_directory, session
 
 from database import create_user, verify_user
 
-auth_bp = Blueprint("auth", __name__)
+FRONTEND_DIR = Path(__file__).resolve().parent / "frontend"
+auth_bp = Blueprint("auth", __name__)     # a "blueprint" is a group of routes
 
 
-# ── Serve auth page ──────────────────────────────────────
+def start_session(user):
+    session["user_id"] = user["id"]
+    session["username"] = user["username"]
+    session.permanent = True
+
+
+def read_field(data, *names):
+    """Return the first non-empty text found under any of the given names."""
+    for name in names:
+        value = data.get(name)
+        if value:
+            return str(value).strip()
+    return ""
+
 
 @auth_bp.get("/auth")
 def auth_page():
@@ -30,87 +53,42 @@ def auth_page():
     return send_from_directory(FRONTEND_DIR, "auth.html")
 
 
-@auth_bp.get("/auth.css")
-def auth_css():
-    return send_from_directory(FRONTEND_DIR, "auth.css")
-
-
-@auth_bp.get("/auth.js")
-def auth_js():
-    return send_from_directory(FRONTEND_DIR, "auth.js")
-
-
-# ── API: Signup ──────────────────────────────────────────
-
 @auth_bp.post("/api/signup")
 def api_signup():
-    data     = request.get_json(silent=True) or {}
-    username = (data.get("username") or "").strip()
-    email    = (data.get("email")    or "").strip()
-    password = (data.get("password") or "")
+    data = request.get_json(silent=True) or {}
+    username = read_field(data, "username")
+    email = read_field(data, "email")
+    password = data.get("password") or ""
 
-    if not username or not email or not password:
+    if not (username and email and password):
         return jsonify({"error": "All fields are required."}), 400
 
     result = create_user(username, email, password)
-
     if not result["ok"]:
         return jsonify({"error": result["error"]}), 400
 
-    user = result["user"]
-    session["user_id"]       = user["id"]
-    session["username"]      = user["username"]
-    session.permanent        = True
+    start_session(result["user"])
+    return jsonify({"message": "Account created successfully!"})
 
-    return jsonify({
-        "message":  "Account created successfully!",
-        "username": user["username"],
-    })
-
-
-# ── API: Login ───────────────────────────────────────────
 
 @auth_bp.post("/api/login")
 def api_login():
-    data             = request.get_json(silent=True) or {}
-    username_or_email = (data.get("username") or data.get("email") or "").strip()
-    password         = (data.get("password") or "")
+    data = request.get_json(silent=True) or {}
+    identifier = read_field(data, "username", "email")
+    password = data.get("password") or ""
 
-    if not username_or_email or not password:
+    if not (identifier and password):
         return jsonify({"error": "Username/email and password are required."}), 400
 
-    result = verify_user(username_or_email, password)
-
+    result = verify_user(identifier, password)
     if not result["ok"]:
         return jsonify({"error": result["error"]}), 401
 
-    user = result["user"]
-    session["user_id"]  = user["id"]
-    session["username"] = user["username"]
-    session.permanent   = True
+    start_session(result["user"])
+    return jsonify({"message": "Login successful!"})
 
-    return jsonify({
-        "message":  "Login successful!",
-        "username": user["username"],
-    })
-
-
-# ── API: Logout ──────────────────────────────────────────
 
 @auth_bp.post("/api/logout")
 def api_logout():
     session.clear()
     return jsonify({"message": "Logged out successfully."})
-
-
-# ── API: Session check ───────────────────────────────────
-
-@auth_bp.get("/api/me")
-def api_me():
-    if "user_id" not in session:
-        return jsonify({"logged_in": False}), 401
-    return jsonify({
-        "logged_in": True,
-        "user_id":   session["user_id"],
-        "username":  session["username"],
-    })
