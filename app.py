@@ -1,5 +1,3 @@
-# app.py
-
 """
 app.py  -  the MAIN file. Start the website with:  python app.py
 
@@ -9,13 +7,17 @@ Think of the app like a restaurant:
   * The browser page (frontend/index.html) is the CUSTOMER. It asks for things.
   * app.py is the WAITER. It takes each request and brings back an answer.
   * The files in the pipeline/ folder are the COOKS. They do the hard work
-    (read the PDF, talk to Gemini, search inside the paper).
+    (read the PDF, talk to Gemini, search inside the paper, compare papers).
 
 Every "route" below is ONE thing the browser can ask for.
 Example: the route "/api/upload" means "please save this PDF".
 
 The cache: asking Gemini is slow, so after the first answer we SAVE it as a
 small file in the cache/ folder. Next time we just read the file.
+
+The comparison: the browser sends 2 or 3 paper paths. For each paper we collect
+what is already saved (summary, difficulty score, roadmap). comparer.py (the cook)
+puts it side by side. The AI verdict is a SECOND request, saved after the first time.
 
 FUNCTION GUIDE
 ------------------------------------------------------------
@@ -25,6 +27,7 @@ FUNCTION GUIDE
    handle_error            turn any error into a clean {"error": "..."} answer
    read_body               read the data the browser sent
    get_api_key             the user's Gemini key (or the key from .env)
+   optional_api_key        same, but None instead of an error
  PAPERS AND FILES
    get_user_upload_dir     the folder with this user's PDFs
    normalize_pdf_path      check a PDF path is safe and belongs to this user
@@ -32,6 +35,7 @@ FUNCTION GUIDE
    clean_title             paper name without the date prefix
    collection_name_from_path   the name used to save a paper in the database
    lower_name              helper for sorting files by name
+   title_sort_key          helper for sorting papers by title
    paper_record            all info about one paper
    list_papers             info about all papers of this user
  INDEXING (reading a paper so we can search inside it)
@@ -49,6 +53,11 @@ FUNCTION GUIDE
    api_upload              upload a PDF
    api_analyze             difficulty score for this user
    api_summary             paper summary
+   read_compare_paths      check the papers chosen for comparison
+   pdf_stats               page count and reading time of a PDF
+   compare_bundle          everything we know about one paper
+   api_compare             compare 2 or 3 papers
+   api_compare_verdict     the AI verdict for a comparison
    api_chat                answer a question about the paper
    api_chat_history        the saved chat
    api_prerequisites       learning roadmap for this user
@@ -70,6 +79,7 @@ from datetime import datetime
 from functools import wraps
 from pathlib import Path
 
+import fitz        # PyMuPDF: we use it to count the pages of a PDF
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, redirect, request, send_from_directory, session
 from werkzeug.exceptions import HTTPException
@@ -93,6 +103,8 @@ print("[startup] Loading embedding model...")
 from embedder import collection_exists_and_has_data, embed_and_store
 from auth_routes import auth_bp
 from chunker import chunk_text
+from comparer import (MAX_PAPERS, MIN_PAPERS, build_comparison, build_verdict,
+                      comparison_key, relatedness)
 from database import (add_known_term, delete_all_known_terms, delete_gemini_api_key,
                        delete_known_term, get_gemini_api_key, get_known_terms,
                        get_known_terms_set, set_gemini_api_key)
@@ -101,12 +113,12 @@ from personalization import parse_prereq_topics, personalize_analysis, personali
 from prerequisite_extractor import extract_prerequisites
 from qa_engine import answer_question
 from retriever import retrieve_relevant_chunks
-from summarizer import summarize_paper
+from summarizer import cut_references, summarize_paper
 from term_explainer import explain_term
 
 
 # ---------------------------------------------------------------
-# Setup and helpers
+# Setup and helpers :: creating a secrete key
 # ---------------------------------------------------------------
 def get_secret_key():
     """The secret key signs the login cookie. We save it in a file, so users
@@ -139,7 +151,7 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024    # biggest upload: 50 MB
 app.register_blueprint(auth_bp)                         # login / signup routes
 
-
+# check is user logged in or not 
 def login_required(route_function):
     """Write @login_required above a route. Then only logged-in users can use it."""
     @wraps(route_function)
@@ -174,7 +186,7 @@ def read_body():
     """The data (JSON) the browser sent. An empty dict if there is none."""
     return request.get_json(silent=True) or {}
 
-
+#check api key in session then in env file  
 def get_api_key():
     """The user's own Gemini key. If they have none, use the key from .env."""
     key = get_gemini_api_key(session["user_id"]) or os.getenv("GEMINI_API_KEY")
@@ -183,12 +195,21 @@ def get_api_key():
     return key
 
 
+def optional_api_key():
+    """Same as get_api_key, but returns None when there is no key.
+    Used when the saved results may already exist, so no key is needed."""
+    try:
+        return get_api_key()
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------
 # Papers and files
 # ---------------------------------------------------------------
 DATE_PREFIX = re.compile(r"^\d{8}_\d{6}_")     # uploaded files start with 20260101_120000_
 
-
+#make folder with user id
 def get_user_upload_dir():
     """The folder that holds this user's PDFs (made if it does not exist)."""
     user_dir = UPLOAD_DIR / str(session.get("user_id", "anonymous"))
@@ -198,6 +219,7 @@ def get_user_upload_dir():
 
 def normalize_pdf_path(raw_path):
     """Only allow PDFs inside the CURRENT user's own folder."""
+    #This is the trick that catches hackers e.g papers/uploads/1/../2/secret.pdf.
     user_dir = get_user_upload_dir().resolve()
     candidate = (BASE_DIR / raw_path.strip()).resolve()
 
@@ -219,7 +241,7 @@ def pdf_from_request(data):
         raise ValueError("paper_path is required.")
     return normalize_pdf_path(str(raw_path))
 
-
+#20260101_120000_paper.pdf -> paper
 def clean_title(pdf_path):
     return DATE_PREFIX.sub("", pdf_path.stem)
 
@@ -236,6 +258,11 @@ def collection_name_from_path(pdf_path):
 
 def lower_name(path):
     return path.name.lower()
+
+
+def title_sort_key(path):
+    """Sort papers by title, so Paper A, B, C is the same in every comparison."""
+    return clean_title(path).lower()
 
 
 def paper_record(pdf_path):
@@ -480,9 +507,96 @@ def api_summary():
 
     summary = cache_get("summary3", name)
     if summary is None:
-        summary = summarize_paper(str(pdf_path), get_api_key(), clean_title(pdf_path))
+        summary = summarize_paper(str(pdf_path), get_api_key(), clean_title(pdf_path), name)
         cache_set("summary3", name, summary)
     return jsonify({"summary": summary})
+
+
+# ---------------------------------------------------------------
+# ROUTES: comparison
+# ---------------------------------------------------------------
+def read_compare_paths(data):
+    """Check the chosen papers. Returns them sorted by title (so A, B, C never change)."""
+    raw_list = data.get("paper_paths")
+    if not isinstance(raw_list, list):
+        raise ValueError("paper_paths must be a list.")
+
+    paths = []
+    for item in raw_list:
+        path = normalize_pdf_path(str(item))
+        if path not in paths:           # the same paper twice counts once
+            paths.append(path)
+
+    if len(paths) < MIN_PAPERS:
+        raise ValueError("Pick at least " + str(MIN_PAPERS) + " different papers.")
+    if len(paths) > MAX_PAPERS:
+        raise ValueError("You can compare up to " + str(MAX_PAPERS) + " papers.")
+
+    paths.sort(key=title_sort_key)
+    return paths
+
+
+def pdf_stats(pdf_path):
+    """Returns (number of pages, minutes to read). We guess 200 words per minute."""
+    with fitz.open(str(pdf_path)) as document:
+        pages = document.page_count
+    words = len(cut_references(extract_text(str(pdf_path))).split())
+    minutes = max(1, round(words / 200))
+    return pages, minutes
+
+
+def compare_bundle(pdf_path, api_key):
+    """Everything we know about ONE paper. Uses saved results, makes only what is missing."""
+    name = collection_name_from_path(pdf_path)
+
+    summary = cache_get("summary3", name)
+    if summary is None:
+        summary = summarize_paper(str(pdf_path), api_key, clean_title(pdf_path), name)
+        cache_set("summary3", name, summary)
+
+    pages, minutes = pdf_stats(pdf_path)
+    return {
+        "name": name,
+        "title": clean_title(pdf_path),
+        "path": pdf_path.relative_to(BASE_DIR).as_posix(),
+        "summary": summary,
+        "analysis": analyze_paper(pdf_path, api_key),
+        "prereqs": cache_get("prereqs", name, is_json=False),
+        "pages": pages,
+        "read_minutes": minutes,
+    }
+
+
+@app.post("/api/compare")
+@login_required
+def api_compare():
+    paths = read_compare_paths(read_body())
+    api_key = optional_api_key()
+    known_terms = get_known_terms_set(session["user_id"])
+
+    bundles = []
+    for path in paths:
+        bundles.append(compare_bundle(path, api_key))
+    return jsonify(build_comparison(bundles, known_terms))
+
+
+@app.post("/api/compare/verdict")
+@login_required
+def api_compare_verdict():
+    paths = read_compare_paths(read_body())
+
+    bundles = []
+    for path in paths:
+        bundles.append(compare_bundle(path, optional_api_key()))
+    level = relatedness(bundles)["level"]
+
+    key = comparison_key(bundles, level)
+    verdict = cache_get("verdict", key)
+    was_saved = verdict is not None
+    if not was_saved:
+        verdict = build_verdict(bundles, level, get_api_key())
+        cache_set("verdict", key, verdict)
+    return jsonify({"verdict": verdict, "cached": was_saved})
 
 
 # ---------------------------------------------------------------

@@ -3,21 +3,43 @@ summarizer.py  -  write the summary of a paper (5 cards + numbers).
 
 HOW THIS FILE WORKS (easy words)
 ------------------------------------------------------------
-1. Read the whole paper. Cut off the reference list. If it is very long,
-   keep the start (70%) and the end (30%).
-2. Ask Gemini ONE time to answer in JSON (a computer-friendly format) with:
+We do NOT send the whole paper to Gemini any more. We send only the important parts.
+1. Cut off the reference list.
+2. SAFETY 1: if the paper is short, send the full text (nothing is lost).
+3. LAYER 1: look for the headings of 5 parts:
+      Abstract, Introduction, Method, Results, Conclusion
+   and copy the text under each heading.
+4. LAYER 2: if a part is missing, ask ChromaDB (free, no Gemini), like the Q&A:
+      "What are the results of this paper?"  and take the chunks it gives.
+5. Put all the parts together.
+6. SAFETY 2: if we found almost nothing, use the OLD way (the whole paper, trimmed).
+7. Ask Gemini ONE time to answer in JSON (a computer-friendly format) with:
      5 cards: about, problem, did, results, limits  (each has a "short" and a "detailed" text)
      comparisons: old method vs new method on the same metric
      key_numbers: other important result numbers (each has a value, a unit and a label)
-3. CHECK Gemini's work. This is the important part:
+8. CHECK Gemini's work. This is the important part:
      * Every number must really appear in the PDF text, or we drop it.
      * If a number has no unit, we look in the paper for a % sign next to it.
      * WE do the maths (difference, percent, bar widths), not Gemini.
-4. If the JSON is broken, we try one more time.
+9. If the JSON is broken, we try one more time.
 
 FUNCTION GUIDE
 ------------------------------------------------------------
-   prepare_text          cut references and very long text
+ CUTTING THE TEXT
+   cut_references        cut the reference list
+   prepare_text          OLD way: cut references and trim a very long text
+ LAYER 1: FIND PARTS BY HEADING
+   clean_heading         a line in small letters, without its number
+   is_any_heading        is this line a heading we know?
+   is_top_heading        is this line a main heading (it ends a part)?
+   find_heading_lines    where does each part start?
+   find_section_end      where does a part end?
+   find_sections         the text of each part we can find
+ LAYER 2: SEARCH WITH CHROMADB
+   search_missing_part   ask ChromaDB for the chunks of a missing part
+   collect_parts         layer 1 + layer 2, put all parts together
+   pick_text             choose what to send to Gemini (with the safety rules)
+ ASK GEMINI AND CHECK
    build_prompt          the instruction we send to Gemini
    parse_json            turn Gemini's answer into a Python dictionary
    to_text               turn any value into clean text
@@ -37,12 +59,67 @@ FUNCTION GUIDE
 import json
 import re
 
+from embedder import collection_exists_and_has_data
 from extractor import MIN_TEXT_LENGTH, extract_text
 from model_config import generate_text
+from retriever import retrieve_relevant_chunks
 
 NOT_STATED = "Not stated in the paper."
-MAX_CHARS = 60000                      # a longer paper is trimmed (keeps it fast and cheap)
+MAX_CHARS = 60000                      # the OLD way: a longer paper is trimmed to this
 CARD_NAMES = ["about", "problem", "did", "results", "limits"]
+
+# ---------------------------------------------------------------
+# Settings for the "important parts" plan
+# ---------------------------------------------------------------
+SHORT_PAPER_CHARS = 16000     # a paper this short (about 4000 tokens) is sent in full
+MIN_SECTION_CHARS = 300       # a part with less text than this counts as "missing"
+MIN_TOTAL_CHARS = 1500        # if all parts together are shorter, use the old way
+
+PART_ORDER = ["abstract", "introduction", "method", "results", "conclusion"]
+
+PART_TITLES = {
+    "abstract": "ABSTRACT",
+    "introduction": "INTRODUCTION",
+    "method": "METHOD",
+    "results": "RESULTS",
+    "conclusion": "CONCLUSION",
+}
+
+# The headings we look for (small letters, no numbers)
+HEADING_NAMES = {
+    "abstract": ["abstract"],
+    "introduction": ["introduction"],
+    "method": ["method", "methods", "methodology", "approach", "proposed method",
+               "proposed approach", "our approach", "model architecture", "proposed model",
+               "materials and methods", "system architecture", "proposed system",
+               "framework", "proposed framework"],
+    "results": ["results", "experiments", "experimental results", "results and discussion",
+                "evaluation", "experiments and results", "discussion"],
+    "conclusion": ["conclusion", "conclusions", "conclusion and future work",
+                   "conclusions and future work", "discussion and conclusion",
+                   "future work", "concluding remarks"],
+}
+
+# Headings that always end a part
+END_HEADINGS = ["references", "acknowledgments", "acknowledgements", "bibliography", "appendix"]
+
+# The most letters we keep for each part (about 4000 tokens in total)
+MAX_PART_CHARS = {
+    "abstract": 2000,
+    "introduction": 3500,
+    "method": 4000,
+    "results": 5000,
+    "conclusion": 2500,
+}
+
+# The question we ask ChromaDB when a part is missing
+SEARCH_QUESTIONS = {
+    "abstract": "What is this paper about?",
+    "introduction": "What problem does this paper try to solve and why does it matter?",
+    "method": "What method or approach do the authors use?",
+    "results": "What are the results of this paper?",
+    "conclusion": "What are the conclusion, limitations and future work of this paper?",
+}
 
 # The shape of the answer we ask Gemini for
 SCHEMA = """{
@@ -61,13 +138,22 @@ SCHEMA = """{
 }"""
 
 
-def prepare_text(full_text):
-    """Cut the reference list. Keep only the start and the end of a very long paper."""
+# ---------------------------------------------------------------
+# Cutting the text
+# ---------------------------------------------------------------
+def cut_references(full_text):
+    """Cut the reference list (only if it is in the second half of the paper)."""
     text = full_text.strip()
     matches = list(re.finditer(r"\n\s*(references|bibliography)\s*\n", text, re.IGNORECASE))
     if matches and matches[-1].start() > len(text) * 0.5:
         text = text[:matches[-1].start()]
     text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
+
+
+def prepare_text(full_text):
+    """The OLD way: cut the references. Keep only the start and the end of a very long paper."""
+    text = cut_references(full_text)
 
     if len(text) > MAX_CHARS:
         head = text[:int(MAX_CHARS * 0.7)]
@@ -76,10 +162,153 @@ def prepare_text(full_text):
     return text
 
 
+# ---------------------------------------------------------------
+# LAYER 1: find the parts by their headings
+# ---------------------------------------------------------------
+def clean_heading(line):
+    """"3.1 Model Architecture:" -> "model architecture" (small letters, no number)."""
+    text = line.strip().lower()
+    text = re.sub(r"^(\d+(\.\d+)*\.?|[ivx]+\.)\s*", "", text)
+    text = text.strip(" .:-")
+    return text
+
+
+def is_any_heading(line):
+    """True if the line is one of the headings we look for (or a reference heading)."""
+    cleaned = clean_heading(line)
+    if cleaned == "":
+        return False
+    if cleaned in END_HEADINGS:
+        return True
+    for part in PART_ORDER:
+        if cleaned in HEADING_NAMES[part]:
+            return True
+    return False
+
+
+def is_top_heading(line):
+    """True if the line is a MAIN heading like "4 Experiments" (it ends the part before it)."""
+    text = line.strip()
+    if len(text) < 4 or len(text) > 60:
+        return False
+    if re.match(r"^(\d{1,2}|[IVX]+)\.?\s+[A-Z][A-Za-z ,&:-]*$", text):
+        return True
+    return is_any_heading(text)
+
+
+def find_heading_lines(lines):
+    """For each part, the number of the line where its heading is (the first one we see)."""
+    found = {}
+    for number in range(len(lines)):
+        cleaned = clean_heading(lines[number])
+        if cleaned == "":
+            continue
+
+        for part in PART_ORDER:
+            if part in found:
+                continue
+            if cleaned in HEADING_NAMES[part]:
+                found[part] = number
+            elif part == "abstract" and re.match(r"abstract\b", cleaned):
+                found[part] = number      # for "Abstract - the text starts here"
+    return found
+
+
+def find_section_end(lines, start):
+    """The line number where the part ends: the next main heading, or the end of the text."""
+    for number in range(start + 1, len(lines)):
+        if is_top_heading(lines[number]):
+            return number
+    return len(lines)
+
+
+def find_sections(full_text):
+    """LAYER 1. Returns a dictionary: part name -> text of that part (only the parts we found)."""
+    lines = cut_references(full_text).split("\n")
+    starts = find_heading_lines(lines)
+
+    sections = {}
+    for part in PART_ORDER:
+        if part not in starts:
+            continue
+        start = starts[part]
+        end = find_section_end(lines, start)
+        text = "\n".join(lines[start:end]).strip()
+        text = text[:MAX_PART_CHARS[part]]
+        if len(text) >= MIN_SECTION_CHARS:
+            sections[part] = text
+    return sections
+
+
+# ---------------------------------------------------------------
+# LAYER 2: search with ChromaDB (free, no Gemini)
+# ---------------------------------------------------------------
+def search_missing_part(part, collection_name):
+    """Ask ChromaDB a question about the part. Returns the best chunks joined as one text."""
+    question = SEARCH_QUESTIONS[part]
+    chunks = retrieve_relevant_chunks(question, collection_name=collection_name, top_k=6)
+    text = "\n".join(chunks[:6])
+    return text[:MAX_PART_CHARS[part]]
+
+
+def collect_parts(full_text, collection_name):
+    """Layer 1, then layer 2 for the missing parts. Returns all parts as ONE text."""
+    sections = find_sections(full_text)
+
+    missing = []
+    for part in PART_ORDER:
+        if part not in sections:
+            missing.append(part)
+    print("[summarizer] found by heading:", list(sections.keys()), "| missing:", missing)
+
+    # layer 2 works only if the paper is already saved in ChromaDB (indexing is finished)
+    if missing and collection_name and collection_exists_and_has_data(collection_name):
+        for part in missing:
+            try:
+                text = search_missing_part(part, collection_name)
+            except Exception as error:
+                print("[summarizer] search failed for", part, ":", error)
+                text = ""
+            if text.strip():
+                sections[part] = text
+                print("[summarizer] found by search:", part)
+
+    blocks = []
+    for part in PART_ORDER:
+        if part in sections:
+            blocks.append("[" + PART_TITLES[part] + "]\n" + sections[part])
+    return "\n\n".join(blocks)
+
+
+def pick_text(full_text, collection_name):
+    """Choose the text we send to Gemini. This is where the safety rules are."""
+    body = cut_references(full_text)
+
+    # SAFETY 1: a short paper is sent in full, so nothing is lost
+    if len(body) <= SHORT_PAPER_CHARS:
+        print("[summarizer] short paper: sending the full text")
+        return prepare_text(full_text)
+
+    important = collect_parts(full_text, collection_name)
+
+    # SAFETY 2: we found almost nothing, so use the old way
+    if len(important) < MIN_TOTAL_CHARS:
+        print("[summarizer] not enough important parts: using the old way")
+        return prepare_text(full_text)
+
+    print("[summarizer] sending the important parts only:", len(important), "letters")
+    return important
+
+
+# ---------------------------------------------------------------
+# Ask Gemini and check the answer
+# ---------------------------------------------------------------
 def build_prompt(text, title):
     return f"""You are an expert academic tutor. Summarize the research paper below for a university student.
 
 Paper title: "{title}"
+
+Note: the text below may hold only the most important parts of the paper (marked like [RESULTS]).
 
 === PAPER TEXT ===
 {text}
@@ -98,7 +327,10 @@ Return ONLY valid JSON, no markdown, no extra text, in exactly this shape:
 
 === LENGTH ===
 - "short": 1 to 2 simple sentences.
-- "detailed": one paragraph of 4 to 6 sentences.
+- "detailed": 4 to 6 SHORT points. Put each point on its own line (separate the points with a line break).
+  Each point starts with a 1 to 3 word label and a colon, then ONE short sentence of at most 18 words.
+  Example: "Idea: The model reads all the words at the same time."
+  No long sentences. No paragraph.
 
 === COMPARISONS ===
 - ONLY when the paper gives a number for an old/baseline method AND a number for the new/proposed method on the SAME metric.
@@ -133,7 +365,7 @@ def parse_json(raw_answer):
     end = raw_answer.rfind("}")
     if start == -1 or end == -1:
         raise ValueError("No JSON found in the reply.")
-    return json.loads(raw_answer[start:end + 1])
+    return json.loads(raw_answer[start:end + 1], strict=False)
 
 
 def to_text(value):
@@ -301,6 +533,7 @@ def clean_card(item):
 
 
 def clean_summary(data, full_text):
+    # we check the numbers against the WHOLE paper (not only the parts we sent)
     paper_text = full_text.replace(",", "")
 
     result = {}
@@ -318,12 +551,13 @@ def clean_summary(data, full_text):
     return result
 
 
-def summarize_paper(pdf_path, api_key, paper_title=""):
+def summarize_paper(pdf_path, api_key, paper_title="", collection_name=""):
     full_text = extract_text(pdf_path)
     if len(full_text.strip()) < MIN_TEXT_LENGTH:
         raise ValueError("Could not extract enough text.")
 
-    prompt = build_prompt(prepare_text(full_text), paper_title)
+    text_to_send = pick_text(full_text, collection_name)
+    prompt = build_prompt(text_to_send, paper_title)
     last_error = None
     for attempt in range(2):              # try twice, in case the JSON is broken
         try:

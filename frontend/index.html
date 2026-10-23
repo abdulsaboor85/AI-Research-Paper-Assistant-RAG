@@ -15,6 +15,21 @@
    2. waits for the answer,
    3. builds a bit of HTML and puts it on the page.
 
+ The Compare tab: you pick 2 or 3 papers (they get the letters A, B, C).
+ JavaScript first makes sure each paper has its summary and difficulty score,
+ then asks the server to compare them and draws the result. The AI verdict
+ is a second, separate request, so the page can show the rest first.
+ The AI verdict card is shown FIRST (at the top). If two papers have almost the
+ same difficulty, the verdict also decides which paper is read first.
+ The "score breakdown" is a stacked bar: one bar per paper, cut into 4 colored
+ parts. Each part shows how many points it adds to the final difficulty score.
+
+ The Summary tab has a Short view (1-2 sentences) and a Detailed view
+ (4-5 short points, one point per line).
+
+ The theme (light / dark): ONE function, applyTheme(), does everything.
+ It puts the class "dark" on the page, changes the icon and saves your choice.
+
  Words used in the JavaScript:
    const          a value that never changes
    let            a value that can change
@@ -64,7 +79,7 @@
    sendMessage       send a question and show the answer
    handleChatKey     Enter sends, Shift+Enter = new line
  6. INSIGHTS TAB (difficulty score)
-   clearSavedResults forget saved Insights and Prerequisites
+   clearSavedResults forget saved Insights, Prerequisites and Compare results
    renderInsights    draw the score page
    loadInsightsTab   get the score and show it
  7. PREREQUISITES TAB (learning roadmap)
@@ -82,17 +97,52 @@
    summaryPlainText  the summary as plain text (Copy notes)
    comparisonRowHtml one "old vs new" number row
    keyNumbersHtml    the big number tiles
+   detailPointsHtml  the detailed text as short points
    renderSummary     draw the summary
    loadSummaryTab    get the summary and show it
- 10. WINDOWS (Memory + API key)
+ 10. COMPARE TAB
+   cmpLetter / cmpShort   letter and short text of a paper
+   cmpPathsKey       one text key for a group of papers
+   cmpPathsOf        the paths of the papers in a comparison result
+   cmpSelectedPapers the chosen papers, sorted by title
+   cmpSelectedPaths  the paths of the chosen papers
+   cmpKeepExisting   forget chosen papers that do not exist any more
+   cmpPickDefaults   choose two papers the first time
+   clearCompareCache forget saved comparisons
+   loadComparisonTab open the Compare tab
+   buildCompareShell make the empty Compare page
+   showCmpHint       the "ready when you are" card
+   renderCmpPicker   paper chips + Compare button
+   toggleCmpPaper    choose / unchoose a paper
+   renderCmpProgress / setCmpProgress / setCmpPaperState   the loading card
+   cmpOptionalPost   send data, but return null if it fails
+   prepareComparePapers  make sure each paper has summary + score
+   runComparison     run the comparison
+   cmpHeroHtml       the relatedness circle
+   cmpControlsHtml   Standard/Personalized and Short/Detailed buttons
+   cmpPaperCardsHtml one card per paper with its score
+   cmpStackedCardHtml  the stacked score bar card (one bar per paper)
+   cmpAspectsHtml    side-by-side text (problem, method, results...)
+   cmpMetricsHtml    the same number measured in each paper
+   cmpConceptsHtml   shared and unique concepts
+   cmpAdjustOrder    if two scores are close, the AI verdict decides who is first
+   cmpOrderInnerHtml the inside of the reading order card
+   cmpOrderHtml      the reading order card (in a box, so it can be redrawn)
+   cmpVerdictShellHtml / cmpVerdictInnerHtml / paintCmpVerdict / loadCmpVerdict   AI verdict
+   cmpTipHtml        "upload a closer paper" tip
+   renderCmpResult   draw the whole comparison
+   refreshComparePicker   update the chips when papers change
+   refreshCompareColors   redraw the Compare tab after a theme change
+ 11. WINDOWS (Memory + API key)
    showWindow / toggleSettingsMenu / closeSettingsMenu
    openMemoryModal / closeMemoryModal / loadKnownTerms /
    renderMemoryModal / deleteKnownTerm / deleteAllKnownTerms
    openApiKeyModal / closeApiKeyModal / saveApiKey / removeApiKey
- 11. TABS AND START
+ 12. THEME, TABS AND START
+   applyTheme        switch light / dark, change the icon, save the choice
+   toggleDark        the Theme button: switch to the other theme
    getActiveTabName  name of the open tab
    switchTab         show one tab, hide the others
-   toggleDark        light / dark switch
    setupUploadButtons / setupResizeHandle   upload and panel resize
    logout            sign out
    init              runs once when the page opens
@@ -110,7 +160,8 @@
 /* =====================================================================
    PART 2: CSS  (how it looks)
    1 Colors and base | 2 Sidebar | 3 Tabs | 4 Shared pieces | 5 Chat |
-   6 PDF panel | 7 Insights, Prerequisites, Explain | 8 Summary | 9 Windows and popups
+   6 PDF panel | 7 Insights, Prerequisites, Explain | 8 Summary | 9 Compare |
+   10 Windows and popups
    ===================================================================== */
 
 /* ---------- 1. COLORS AND BASE ---------- */
@@ -124,9 +175,12 @@
   --amber: #d97706; --amber-soft: #fef3c7;
   --green: #16a34a; --green-soft: #dcfce7;
   --red: #dc2626; --red-soft: #fee2e2;
+  --purple: #8b5cf6;
+  --series-1: #2d5be3; --series-2: #ea580c; --series-3: #0d9488; --series-4: #9333ea;
   --font: 'DM Sans', system-ui, sans-serif; --serif: 'Instrument Serif', Georgia, serif;
   --radius: 10px; --radius-lg: 14px; --radius-xl: 20px;
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.06); --shadow: 0 4px 12px rgba(0,0,0,0.08);
+  color-scheme: light;
 }
 body.dark {                              /* dark colors */
   --bg: #0f0f0e; --surface: #1a1916; --surface2: #222120;
@@ -136,7 +190,10 @@ body.dark {                              /* dark colors */
   --amber: #fbbf24; --amber-soft: #2d2210;
   --green: #4ade80; --green-soft: #0f2d1a;
   --red: #f87171; --red-soft: #2d0f0f;
+  --purple: #a78bfa;
+  --series-1: #5b7ff0; --series-2: #fb923c; --series-3: #2dd4bf; --series-4: #a78bfa;
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.4); --shadow: 0 4px 12px rgba(0,0,0,0.5);
+  color-scheme: dark;
 }
 
 html, body { height: 100%; overflow: hidden; }
@@ -352,12 +409,16 @@ button, input, textarea { font-family: inherit; }
 .sum-toggle button.active { background: var(--accent); color: white; }
 .sum-actions { display: flex; gap: 8px; }
 .sum-card { --tone: var(--accent); background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--tone); border-radius: var(--radius-lg); padding: 18px 22px 20px; margin-bottom: 14px; box-shadow: var(--shadow-sm); animation: slideIn 0.35s ease-out both; }
-.tone-blue { --tone: var(--accent); } .tone-amber { --tone: var(--amber); } .tone-purple { --tone: #8b5cf6; } .tone-green { --tone: var(--green); } .tone-red { --tone: var(--red); }
+.tone-blue { --tone: var(--accent); } .tone-amber { --tone: var(--amber); } .tone-purple { --tone: var(--purple); } .tone-green { --tone: var(--green); } .tone-red { --tone: var(--red); }
 .sum-card.is-results { background: color-mix(in srgb, var(--green) 7%, var(--surface)); }
 .sum-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .sum-card-icon { width: 32px; height: 32px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; background: color-mix(in srgb, var(--tone) 14%, transparent); }
 .sum-card-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; color: var(--tone); }
 .sum-text { font-size: 14.5px; line-height: 1.8; }
+.sum-points { display: flex; flex-direction: column; gap: 10px; }
+.sum-point { display: flex; gap: 10px; font-size: 14px; line-height: 1.6; }
+.sum-point::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--tone); margin-top: 8px; flex-shrink: 0; }
+.sum-point b { color: var(--tone); }
 .sum-compare { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-top: 14px; }
 .sum-compare-metric { font-size: 13px; font-weight: 700; margin-bottom: 10px; }
 .sum-compare-vals { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
@@ -377,7 +438,149 @@ button, input, textarea { font-family: inherit; }
 .sum-number-value { font-size: 22px; font-weight: 700; color: var(--green); line-height: 1.2; }
 .sum-number-label { font-size: 11.5px; color: var(--text2); margin-top: 4px; }
 
-/* ---------- 9. WINDOWS, POPUPS, TOASTS ---------- */
+/* ---------- 9. COMPARE ---------- */
+.cmp-wrap { max-width: 960px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; padding-bottom: 36px; }
+#cmpResult { display: flex; flex-direction: column; gap: 16px; }
+.cmp-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xl); padding: 18px 20px; box-shadow: var(--shadow-sm); animation: slideIn 0.4s ease-out both; }
+.cmp-noanim .cmp-card { animation: none !important; }
+.cmp-h { font-size: 14.5px; font-weight: 700; }
+.cmp-sub { font-size: 12px; color: var(--text2); line-height: 1.6; margin-top: 3px; }
+.cmp-letter { --pc: var(--accent); display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 7px; background: var(--pc); color: #fff; font-size: 11.5px; font-weight: 700; flex-shrink: 0; }
+.cmp-letter.sm { width: 18px; height: 18px; border-radius: 6px; font-size: 10px; }
+.cmp-letter.lg { width: 30px; height: 30px; border-radius: 10px; font-size: 14px; }
+
+.cmp-picker { background: linear-gradient(135deg, var(--accent-soft), var(--surface) 65%); border-color: var(--accent-border); }
+.cmp-picker-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+.cmp-count { font-size: 11.5px; font-weight: 700; color: var(--accent); background: var(--surface); border: 1px solid var(--accent-border); border-radius: 99px; padding: 4px 12px; white-space: nowrap; }
+.cmp-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.cmp-chip { --pc: var(--text3); display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 6px 14px 6px 7px; background: var(--surface); border: 1.5px solid var(--border2); border-radius: 99px; font-size: 12.5px; font-weight: 500; color: var(--text2); cursor: pointer; transition: all 0.16s; }
+.cmp-chip:hover { border-color: var(--accent); color: var(--text); }
+.cmp-chip.on { border-color: var(--pc); color: var(--text); background: color-mix(in srgb, var(--pc) 9%, var(--surface)); }
+.cmp-chip.is-busy { opacity: 0.55; }
+.cmp-chip-mark { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--surface2); color: var(--text2); font-weight: 700; font-size: 12px; flex-shrink: 0; }
+.cmp-chip.on .cmp-chip-mark { background: var(--pc); color: #fff; }
+.cmp-chip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.cmp-picker-foot { margin-top: 16px; display: flex; justify-content: flex-end; }
+.cmp-run { border-radius: 99px; font-weight: 700; }
+.cmp-run.busy { opacity: 0.6; cursor: progress; }
+
+.cmp-hint { text-align: center; padding: 34px 24px; border: 1.5px dashed var(--border2); box-shadow: none; }
+.cmp-hint-icon { font-size: 36px; margin-bottom: 8px; }
+.cmp-progress-top { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+.cmp-pct { font-size: 13px; font-weight: 700; color: var(--accent); }
+.cmp-fill { width: 0; }
+.cmp-prog-list { display: flex; flex-direction: column; gap: 8px; margin: 14px 0; }
+.cmp-prog-item { --pc: var(--accent); display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); }
+.cmp-prog-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 500; }
+.cmp-prog-state { font-size: 11px; font-weight: 600; color: var(--text3); }
+.cmp-prog-item.run { border-color: var(--pc); }
+.cmp-prog-item.run .cmp-prog-state { color: var(--pc); animation: pulse 1.2s infinite; }
+.cmp-prog-item.done .cmp-prog-state { color: var(--green); }
+
+.cmp-hero { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; background: linear-gradient(135deg, color-mix(in srgb, var(--lvl) 11%, var(--surface)), var(--surface) 70%); border-color: color-mix(in srgb, var(--lvl) 35%, var(--border)); }
+.cmp-ring { position: relative; width: 108px; height: 108px; flex-shrink: 0; }
+.cmp-ring svg { width: 100%; height: 100%; }
+.cmp-ring-bg { fill: none; stroke: var(--surface2); stroke-width: 9; }
+.cmp-ring-fg { fill: none; stroke: var(--lvl); stroke-width: 9; stroke-linecap: round; }
+.cmp-ring-num { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.cmp-ring-num b { font-size: 24px; line-height: 1; }
+.cmp-ring-num span { font-size: 10px; color: var(--text3); text-transform: uppercase; margin-top: 3px; }
+.cmp-hero-body { flex: 1; min-width: 240px; }
+.cmp-level { display: inline-block; padding: 3px 12px; margin-bottom: 8px; border-radius: 99px; font-size: 11.5px; font-weight: 700; color: var(--lvl); background: color-mix(in srgb, var(--lvl) 14%, transparent); border: 1px solid color-mix(in srgb, var(--lvl) 40%, transparent); }
+.cmp-hero-msg { font-size: 14px; line-height: 1.65; }
+.cmp-hero-shared { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; }
+.cmp-hero-shared > span:first-child { font-size: 11px; font-weight: 600; color: var(--text3); text-transform: uppercase; }
+.cmp-mini-tag { font-size: 11.5px; padding: 3px 10px; border-radius: 99px; background: var(--surface); border: 1px solid var(--border2); color: var(--text2); }
+.cmp-pairs { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.cmp-pair { display: grid; grid-template-columns: 52px 1fr 40px; align-items: center; gap: 10px; font-size: 11.5px; color: var(--text2); }
+.cmp-pair b { text-align: right; color: var(--text); }
+.cmp-pair .bar-fill { background: var(--lvl); }
+
+.cmp-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; }
+.cmp-ctl { display: flex; align-items: center; gap: 10px; font-size: 12px; font-weight: 600; color: var(--text3); }
+.cmp-seg { display: inline-flex; background: var(--surface); border: 1px solid var(--border2); border-radius: 99px; padding: 3px; }
+.cmp-seg button { border: none; background: transparent; color: var(--text2); font-size: 12px; font-weight: 600; padding: 5px 14px; border-radius: 99px; cursor: pointer; }
+.cmp-seg button.on { background: var(--accent); color: #fff; }
+.cmp-note { font-size: 11.5px; color: var(--text3); flex-basis: 100%; }
+
+.cmp-papers { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+.cmp-pcard { --pc: var(--accent); position: relative; padding-top: 22px; border-top: 4px solid var(--pc); display: flex; flex-direction: column; gap: 10px; margin-bottom: 0; }
+.cmp-pcard-top { display: flex; align-items: center; gap: 10px; }
+.cmp-pcard-title { font-size: 13px; font-weight: 600; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cmp-best { position: absolute; top: -1px; right: 14px; background: var(--green); color: #fff; font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 3px 10px; border-radius: 0 0 8px 8px; }
+.cmp-score { display: flex; align-items: baseline; gap: 6px; }
+.cmp-score b { font-family: var(--serif); font-size: 44px; font-weight: 400; line-height: 1; }
+.cmp-score span { font-size: 13px; color: var(--text3); }
+.cmp-was { margin-left: 6px; font-size: 11px; font-weight: 600; color: var(--green); background: var(--green-soft); padding: 2px 8px; border-radius: 99px; }
+.cmp-pcard .pill { align-self: flex-start; }
+.cmp-meta { display: flex; flex-direction: column; gap: 4px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text2); }
+
+/* the stacked score bar: one bar per paper, cut into 4 colored parts */
+.cmp-stack-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0 6px; }
+.cmp-stack-key { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text2); }
+.cmp-stack-swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.cmp-stack-row { display: grid; grid-template-columns: 22px 130px 1fr 48px; align-items: center; gap: 10px; margin-top: 12px; }
+.cmp-stack-title { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-stack-track { display: flex; height: 28px; background: var(--surface2); border-radius: 99px; overflow: hidden; }
+.cmp-stack-part { display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; min-width: 0; overflow: hidden; transition: width 0.5s ease; }
+.cmp-stack-total { font-size: 13px; font-weight: 700; text-align: right; }
+.cmp-stack-scale { display: grid; grid-template-columns: 22px 130px 1fr 48px; gap: 10px; margin-top: 4px; font-size: 10px; color: var(--text3); }
+.cmp-stack-scale-line { display: flex; justify-content: space-between; grid-column: 3; }
+.part-0 { background: var(--accent); }
+.part-1 { background: var(--amber); }
+.part-2 { background: var(--green); }
+.part-3 { background: var(--purple); }
+
+.cmp-aspect { margin-top: 18px; }
+.cmp-aspect-head { display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text2); margin-bottom: 8px; }
+.cmp-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+.cmp-cell { --pc: var(--accent); background: var(--bg); border: 1px solid var(--border); border-top: 3px solid var(--pc); border-radius: var(--radius); padding: 12px 14px; }
+.cmp-cell-tag { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700; color: var(--pc); margin-bottom: 7px; }
+.cmp-cell-text { font-size: 13px; line-height: 1.7; white-space: pre-line; }
+.cmp-cell-text.muted { color: var(--text3); font-style: italic; }
+.cmp-kn { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.cmp-kn-chip { font-size: 11.5px; padding: 3px 10px; border-radius: 99px; background: var(--green-soft); color: var(--green); border: 1px solid var(--green); }
+
+.cmp-soft { background: var(--surface2); box-shadow: none; }
+.cmp-metric { margin-top: 16px; }
+.cmp-metric-name { font-size: 13px; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.cmp-hint-pill { font-size: 10px; font-weight: 600; color: var(--text3); background: var(--surface2); padding: 2px 8px; border-radius: 99px; }
+.cmp-mcell { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.cmp-mcell.win { border-color: var(--green); background: color-mix(in srgb, var(--green) 8%, var(--surface)); }
+.cmp-mcell-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+.cmp-crown { font-size: 10.5px; font-weight: 700; color: var(--green); }
+.cmp-mnum { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+.cmp-mlabel { font-size: 11px; color: var(--text3); margin-top: 6px; }
+
+.cmp-block { margin-top: 16px; }
+.cmp-block-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12.5px; font-weight: 700; margin-bottom: 8px; }
+.cmp-block-title small { font-size: 11.5px; font-weight: 400; color: var(--text3); }
+.cmp-tags { display: flex; flex-wrap: wrap; gap: 7px; }
+.cmp-tag { --pc: var(--accent); font-size: 12px; font-weight: 500; cursor: pointer; padding: 5px 12px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-border); }
+.cmp-tag:hover { background: var(--accent); color: #fff; }
+.cmp-tag.known { background: var(--green-soft); color: var(--green); border-color: var(--green); }
+.cmp-tag.unique { background: color-mix(in srgb, var(--pc) 10%, var(--surface)); color: var(--text); border-color: var(--pc); }
+.cmp-tag.unique:hover { background: var(--pc); color: #fff; }
+
+.cmp-steps { display: flex; flex-direction: column; margin-top: 14px; }
+.cmp-step { --pc: var(--accent); position: relative; display: flex; gap: 14px; padding-bottom: 18px; }
+.cmp-step:last-child { padding-bottom: 0; }
+.cmp-step:not(:last-child)::before { content: ""; position: absolute; left: 15px; top: 34px; bottom: 2px; width: 2px; background: var(--border2); }
+.cmp-step-num { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--pc); color: #fff; font-weight: 700; font-size: 13px; }
+.cmp-step-title { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; }
+.cmp-step-why { font-size: 12.5px; color: var(--text2); line-height: 1.6; margin-top: 3px; }
+
+.cmp-verdict { background: linear-gradient(135deg, var(--accent-soft), var(--surface) 75%); border-color: var(--accent-border); border-left: 4px solid var(--accent); }
+.cmp-verdict-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.cmp-verdict-note { margin-left: auto; font-size: 10.5px; color: var(--text3); }
+.cmp-verdict-text { font-size: 14.5px; line-height: 1.8; }
+.cmp-verdict-rel { font-size: 12.5px; color: var(--text2); line-height: 1.65; margin-top: 10px; font-style: italic; }
+.cmp-bf-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.cmp-bf { --pc: var(--accent); display: flex; align-items: center; gap: 10px; padding: 9px 12px; font-size: 12.5px; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--pc); border-radius: var(--radius); }
+.cmp-verr { font-size: 12.5px; color: var(--red); background: var(--red-soft); border: 1px solid var(--red); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 10px; }
+.cmp-tip { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; border: 1.5px dashed var(--border2); box-shadow: none; }
+
+/* ---------- 10. WINDOWS, POPUPS, TOASTS ---------- */
 .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 9500; align-items: center; justify-content: center; }
 .modal-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px; width: 100%; max-width: 380px; box-shadow: var(--shadow); }
 .modal-box.wide { max-width: 560px; max-height: 82vh; display: flex; flex-direction: column; }
@@ -475,6 +678,7 @@ button, input, textarea { font-family: inherit; }
         <button class="tab"        id="tab-insights"      onclick="switchTab('insights')">Insights</button>
         <button class="tab"        id="tab-prerequisites" onclick="switchTab('prerequisites')">Prerequisites</button>
         <button class="tab"        id="tab-explain"       onclick="switchTab('explain')">Explain</button>
+        <button class="tab"        id="tab-comparison"    onclick="switchTab('comparison')">Compare</button>
       </div>
 
       <div class="tab-content">
@@ -527,6 +731,14 @@ button, input, textarea { font-family: inherit; }
               <button class="primary-btn" onclick="explainTerm()">Explain</button>
             </div>
             <div id="explainContent"></div>
+          </div>
+        </div>
+
+        <!-- Compare -->
+        <div id="panel-comparison" class="tab-panel">
+          <div class="content-panel">
+            <div class="section-title">Paper Comparison</div>
+            <div id="comparisonContent"></div>
           </div>
         </div>
 
@@ -631,12 +843,11 @@ const KEY_DARK = "papermind_darkMode";             // the login page reads this 
 const KEY_PANEL_WIDTH = "papermind_pdfPanelWidth";
 const KEY_ACTIVE_PAPER = "papermind_activePaperId";
 
-const TABS = ["chat", "summary", "insights", "prerequisites", "explain"];
+const TABS = ["chat", "summary", "insights", "prerequisites", "explain", "comparison"];
 const LABEL_COLORS = { Easy: "var(--green)", Medium: "var(--amber)", Hard: "var(--red)" };
 
 // "app" is the memory of the page: everything it needs to remember
 const app = {
-  isDark: false,
   papers: [],               // all papers of the user
   activePaperId: null,      // the selected paper
   pollers: {},              // timers that check if indexing is done
@@ -788,6 +999,7 @@ function renderPapers() {
 
   if (app.papers.length === 0) {
     list.innerHTML = '<div class="empty-note">No papers yet. Upload one to get started.</div>';
+    refreshComparePicker();
     return;
   }
 
@@ -812,6 +1024,9 @@ function renderPapers() {
   }
   list.innerHTML = html;
   onClickAll(list, ".paper-item", function (item) { selectPaper(item.dataset.id); });
+
+  // keep the Compare tab up to date (a new upload, indexing finished...)
+  refreshComparePicker();
 }
 
 // The user clicked a paper in the list
@@ -888,29 +1103,40 @@ function startIndexPolling(paper) {
   }
 
   app.pollers[key] = setInterval(async function () {
+    // 1. ask the server
+    let info = null;
     try {
-      const info = await getJson("/api/status/" + paper.path);
-      const current = findPaper(paper.id);
-      if (current) {
-        current.indexStatus = info.status;
-        current.indexPct = info.pct;
-        current.indexStep = info.step;
-        current.indexMessage = info.message;
-      }
-      renderPapers();
-
-      if (app.activePaperId === paper.id && info.status === "indexing") {
-        showProgressBar(info.pct, info.message || info.step);
-      }
-      if (info.status === "ready") {
-        stop();
-        showToast('"' + paper.title + '" is ready!');
-      } else if (info.status === "error") {
-        stop();
-        showToast('Indexing failed for "' + paper.title + '". Try re-uploading.');
-      }
+      info = await getJson("/api/status/" + paper.path);
     } catch (error) {
-      // a network problem: we simply try again in 2 seconds
+      console.warn("Status check failed:", error);
+      return;                               // try again in 2 seconds
+    }
+
+    // 2. remember the new status
+    const current = findPaper(paper.id);
+    if (current) {
+      current.indexStatus = info.status;
+      current.indexPct = info.pct;
+      current.indexStep = info.step;
+      current.indexMessage = info.message;
+    }
+
+    // 3. bar and message FIRST (nothing can stop these now)
+    if (info.status === "ready") {
+      stop();
+      showToast('"' + paper.title + '" is ready!');
+    } else if (info.status === "error") {
+      stop();
+      showToast('Indexing failed for "' + paper.title + '". Try re-uploading.');
+    } else if (app.activePaperId === paper.id) {
+      showProgressBar(info.pct, info.message || info.step);
+    }
+
+    // 4. draw the list (a drawing error is only printed, it cannot stop the rest)
+    try {
+      renderPapers();
+    } catch (error) {
+      console.warn("Could not redraw the paper list:", error);
     }
   }, 2000);
 }
@@ -1486,10 +1712,11 @@ function handleChatKey(event) {
 
 /* ---------- 6. INSIGHTS TAB (difficulty score) ---------- */
 
-// Learned terms change the scores, so forget the saved Insights and Prerequisites
+// Learned terms change the scores, so forget the saved Insights, Prerequisites and Compare results
 function clearSavedResults() {
   app.insights = {};
   app.prereqs = {};
+  clearCompareCache();
 }
 
 // Draw the difficulty score page
@@ -1914,6 +2141,29 @@ function keyNumbersHtml(numbers) {
   return html + "</div>";
 }
 
+// Turn the detailed text into short points (one point per line)
+function detailPointsHtml(text) {
+  let lines = text.split("\n");
+  if (lines.length === 1) {
+    lines = text.split(/(?<=[.!?])\s+/);      // old saved summaries: one sentence per point
+  }
+  let html = '<div class="sum-points">';
+  for (const line of lines) {
+    const point = line.trim();
+    if (!point) {
+      continue;
+    }
+    const colon = point.indexOf(":");
+    if (colon > 0 && colon < 30) {
+      html += '<div class="sum-point"><span><b>' + escapeHtml(point.slice(0, colon + 1)) + "</b>" +
+              escapeHtml(point.slice(colon + 1)) + "</span></div>";
+    } else {
+      html += '<div class="sum-point"><span>' + escapeHtml(point) + "</span></div>";
+    }
+  }
+  return html + "</div>";
+}
+
 // Draw the summary
 function renderSummary(paper) {
   const panel = byId("summaryContent");
@@ -1953,7 +2203,7 @@ function renderSummary(paper) {
           <span class="sum-card-icon">${card.icon}</span>
           <span class="sum-card-title">${i + 1}. ${card.title}</span>
         </div>
-        <div class="sum-text">${escapeHtml(summary[card.key][mode])}</div>
+        ${mode === "detailed" ? detailPointsHtml(summary[card.key][mode]) : '<div class="sum-text">' + escapeHtml(summary[card.key][mode]) + "</div>"}
         ${extra}
       </div>`;
   }
@@ -1988,7 +2238,916 @@ async function loadSummaryTab(force) {
   }
 }
 
-/* ---------- 10. WINDOWS (Memory + API key) ---------- */
+/* ---------- 10. COMPARE TAB ---------- */
+
+const CMP_MAX = 3;      // keep this equal to MAX_PAPERS in pipeline/comparer.py
+const CMP_LEVEL_COLORS = { related: "var(--green)", somewhat: "var(--amber)", unrelated: "var(--red)" };
+const CMP_NOT_STATED = "Not stated in the paper.";
+const CMP_CLOSE_SCORE = 0.5;     // scores this close count as "almost the same"
+
+// The 4 parts of the difficulty score. "weight" must stay equal to WEIGHTS in
+// pipeline/difficulty_scorer.py. "cls" is the CSS class that gives the part its color.
+const CMP_PARTS = [
+  { key: "readability", label: "Readability", weight: 0.20, cls: "part-0" },
+  { key: "uncommon_words", label: "Uncommon words", weight: 0.15, cls: "part-1" },
+  { key: "technical_terms", label: "Technical terms", weight: 0.25, cls: "part-2" },
+  { key: "llm_perception", label: "LLM opinion", weight: 0.40, cls: "part-3" }
+];
+const CMP_ASPECTS = [
+  { key: "about", icon: "📌", label: "What it is" },
+  { key: "problem", icon: "❓", label: "What problem it solves" },
+  { key: "did", icon: "🛠️", label: "Method used" },
+  { key: "results", icon: "📈", label: "What it found" },
+  { key: "limits", icon: "⚠️", label: "Limits and future work" }
+];
+
+// "cmp" is the memory of the Compare tab
+const cmp = {
+  selected: [],          // ids of the chosen papers
+  data: null,            // the last comparison from the server
+  mode: "base",          // "base" = Standard, "pers" = Personalized
+  detail: "short",       // "short" or "detailed"
+  busy: false,           // true while a comparison is running
+  stale: false,          // true when Memory changed, so the result needs a quiet refresh
+  cache: {},             // saved comparisons (key = the group of papers)
+  verdicts: {},          // saved AI verdicts (key = the group of papers)
+  pickerSignature: ""    // remembers what the chips looked like (to avoid flicker)
+};
+
+// Letter for paper number i: A, B, C
+function cmpLetter(i) {
+  return "ABCD".charAt(i);
+}
+
+// Color of paper number i. The CSS variables --series-1.. change in dark mode.
+function cmpColor(i) {
+  return "var(--series-" + (i + 1) + ")";
+}
+
+// Make a long text shorter
+function cmpShort(text, max) {
+  if (text.length > max) {
+    return text.slice(0, max - 1) + "…";
+  }
+  return text;
+}
+
+// One text key for a group of papers (the same group always gives the same key)
+function cmpPathsKey(paths) {
+  return paths.slice().sort().join("|");
+}
+
+// The paths of the papers inside a comparison result
+function cmpPathsOf(data) {
+  const paths = [];
+  for (const paper of data.papers) {
+    paths.push(paper.path);
+  }
+  return paths;
+}
+
+// The chosen papers, sorted by title (so A, B, C are always the same)
+function cmpSelectedPapers() {
+  const papers = [];
+  for (const id of cmp.selected) {
+    const paper = findPaper(id);
+    if (paper) {
+      papers.push(paper);
+    }
+  }
+  papers.sort(function (a, b) {
+    const first = a.title.toLowerCase();
+    const second = b.title.toLowerCase();
+    if (first < second) {
+      return -1;
+    }
+    if (first > second) {
+      return 1;
+    }
+    return 0;
+  });
+  return papers;
+}
+
+// The paths of the chosen papers
+function cmpSelectedPaths() {
+  const paths = [];
+  for (const paper of cmpSelectedPapers()) {
+    paths.push(paper.path);
+  }
+  return paths;
+}
+
+// Forget chosen papers that do not exist any more
+function cmpKeepExisting() {
+  const kept = [];
+  for (const id of cmp.selected) {
+    if (findPaper(id)) {
+      kept.push(id);
+    }
+  }
+  cmp.selected = kept;
+}
+
+// The first time: choose the selected paper and one other paper that is ready
+function cmpPickDefaults() {
+  const active = getActivePaper();
+  cmp.selected.push(active.id);
+  for (const paper of app.papers) {
+    if (paper.id !== active.id && !isIndexing(paper)) {
+      cmp.selected.push(paper.id);
+      return;
+    }
+  }
+}
+
+// Forget saved comparisons (called when Memory changes)
+function clearCompareCache() {
+  cmp.cache = {};
+  cmp.stale = true;
+}
+
+// Open the Compare tab
+function loadComparisonTab() {
+  const root = byId("comparisonContent");
+
+  if (app.papers.length < 2) {
+    showMessage(root, "⚖️", "Upload at least two papers", "Comparison needs two or more papers. Upload another one and it will show up here automatically.");
+    return;
+  }
+
+  cmpKeepExisting();
+  if (cmp.selected.length === 0) {
+    cmpPickDefaults();
+  }
+  buildCompareShell();
+  renderCmpPicker();
+
+  // Memory changed since the last run: refresh the result quietly
+  if (cmp.data && cmp.stale) {
+    if (cmpPathsKey(cmpSelectedPaths()) === cmpPathsKey(cmpPathsOf(cmp.data))) {
+      runComparison(true);
+    }
+  }
+}
+
+// Make the empty Compare page: the picker on top, the result below
+function buildCompareShell() {
+  if (byId("cmpPicker")) {
+    return;
+  }
+  byId("comparisonContent").innerHTML =
+    '<div class="cmp-wrap"><div id="cmpPicker" class="cmp-card cmp-picker"></div><div id="cmpResult"></div></div>';
+  if (cmp.data) {
+    renderCmpResult(false);
+  } else {
+    showCmpHint();
+  }
+}
+
+// The "ready when you are" card
+function showCmpHint() {
+  byId("cmpResult").innerHTML = `<div class="cmp-card cmp-hint">
+    <div class="cmp-hint-icon">⚖️</div>
+    <div class="cmp-h">Ready when you are</div>
+    <div class="cmp-sub">Pick two or more papers above and press Compare. You get an AI verdict, a relatedness check, a head-to-head, a score breakdown and a reading order.</div></div>`;
+}
+
+// Draw the paper chips and the Compare button
+function renderCmpPicker() {
+  const box = byId("cmpPicker");
+  if (!box) {
+    return;
+  }
+  const chosen = cmpSelectedPapers();
+
+  let chips = "";
+  for (const paper of app.papers) {
+    let position = -1;
+    for (let i = 0; i < chosen.length; i++) {
+      if (chosen[i].id === paper.id) {
+        position = i;
+      }
+    }
+    const isOn = position !== -1;
+    let classes = "cmp-chip";
+    let colorStyle = "";
+    let mark = "+";
+    if (isOn) {
+      classes += " on";
+      colorStyle = ' style="--pc:' + cmpColor(position) + '"';
+      mark = cmpLetter(position);
+    }
+    if (isIndexing(paper)) {
+      classes += " is-busy";
+    }
+    chips += `<button type="button" class="${classes}" data-id="${escapeHtml(paper.id)}"${colorStyle}>
+      <span class="cmp-chip-mark">${mark}</span><span class="cmp-chip-title">${escapeHtml(paper.title)}</span></button>`;
+  }
+
+  let buttonText = "⚖️ Compare";
+  if (cmp.busy) {
+    buttonText = "Comparing…";
+  } else if (chosen.length >= 2) {
+    buttonText = "⚖️ Compare " + chosen.length + " papers";
+  }
+  let busyClass = "";
+  if (cmp.busy) {
+    busyClass = " busy";
+  }
+
+  box.innerHTML = `
+    <div class="cmp-picker-head">
+      <div>
+        <div class="cmp-h">Choose papers to compare</div>
+        <div class="cmp-sub">Pick 2 to ${CMP_MAX}. New uploads appear here automatically. Results are saved, so repeat comparisons are instant.</div>
+      </div>
+      <div class="cmp-count">${chosen.length} / ${CMP_MAX} selected</div>
+    </div>
+    <div class="cmp-chips">${chips}</div>
+    <div class="cmp-picker-foot"><button type="button" id="cmpRunBtn" class="primary-btn cmp-run${busyClass}">${buttonText}</button></div>`;
+
+  onClickAll(box, ".cmp-chip", function (chip) { toggleCmpPaper(chip.dataset.id); });
+  byId("cmpRunBtn").addEventListener("click", function () { runComparison(false); });
+}
+
+// Choose or unchoose a paper
+function toggleCmpPaper(id) {
+  if (cmp.busy) {
+    return;
+  }
+  const index = cmp.selected.indexOf(id);
+  if (index !== -1) {
+    cmp.selected.splice(index, 1);
+  } else {
+    if (cmp.selected.length >= CMP_MAX) {
+      showToast("You can compare up to " + CMP_MAX + " papers.");
+      return;
+    }
+    cmp.selected.push(id);
+  }
+  renderCmpPicker();
+}
+
+// The loading card shown while the papers are prepared
+function renderCmpProgress(papers) {
+  const output = byId("cmpResult");
+  output.classList.remove("cmp-noanim");
+
+  let items = "";
+  for (let i = 0; i < papers.length; i++) {
+    items += `<div class="cmp-prog-item" id="cmpProg${i}" style="--pc:${cmpColor(i)}">
+      <span class="cmp-letter">${cmpLetter(i)}</span>
+      <span class="cmp-prog-title">${escapeHtml(papers[i].title)}</span>
+      <span class="cmp-prog-state">Waiting</span></div>`;
+  }
+  output.innerHTML = `<div class="cmp-card">
+    <div class="cmp-progress-top"><div class="cmp-h">Preparing your comparison</div><div id="cmpProgPct" class="cmp-pct">0%</div></div>
+    <div class="bar"><div class="bar-fill cmp-fill" id="cmpProgFill"></div></div>
+    <div id="cmpProgLabel" class="cmp-sub">Starting…</div>
+    <div class="cmp-prog-list">${items}</div>
+    <div class="cmp-sub">The first time, each paper needs a summary, a difficulty score and a prerequisite list. After that, comparisons are instant.</div></div>`;
+}
+
+function setCmpProgress(percent, label) {
+  const fill = byId("cmpProgFill");
+  if (fill) {
+    fill.style.width = percent + "%";
+  }
+  setText("cmpProgPct", percent + "%");
+  setText("cmpProgLabel", label);
+}
+
+// Change the state text of one paper in the loading card ("Working…", "Ready")
+function setCmpPaperState(index, text, cssClass) {
+  const row = byId("cmpProg" + index);
+  if (!row) {
+    return;
+  }
+  row.className = "cmp-prog-item " + cssClass;
+  row.querySelector(".cmp-prog-state").textContent = text;
+}
+
+// Like postJson, but returns null instead of an error (for jobs that are optional)
+async function cmpOptionalPost(url, body) {
+  try {
+    return await postJson(url, body);
+  } catch (error) {
+    return null;
+  }
+}
+
+// Make sure every chosen paper has a summary and a difficulty score
+async function prepareComparePapers(papers) {
+  for (let i = 0; i < papers.length; i++) {
+    const paper = papers[i];
+    setCmpPaperState(i, "Working…", "run");
+    setCmpProgress(Math.round((i / papers.length) * 88),
+                   'Preparing "' + cmpShort(paper.title, 44) + '" (' + (i + 1) + " of " + papers.length + ")…");
+
+    // the three jobs run at the same time. The prerequisite list is optional.
+    const results = await Promise.all([
+      postJson("/api/summary", { paper_path: paper.path }),
+      postJson("/api/analyze", { paper_path: paper.path }),
+      cmpOptionalPost("/api/prerequisites", { paper_path: paper.path })
+    ]);
+    app.summaries[paper.id] = results[0].summary;
+    setCmpPaperState(i, "Ready", "done");
+  }
+}
+
+// Run the comparison. "silent" = no loading card (used to refresh quietly).
+async function runComparison(silent) {
+  if (cmp.busy) {
+    return;
+  }
+  const papers = cmpSelectedPapers();
+  if (papers.length < 2) {
+    showToast("Pick at least 2 papers.");
+    return;
+  }
+  const paths = cmpSelectedPaths();
+  const key = cmpPathsKey(paths);
+
+  // we already have this comparison: show it right away
+  if (cmp.cache[key]) {
+    cmp.data = cmp.cache[key];
+    cmp.stale = false;
+    renderCmpResult(true);
+    return;
+  }
+
+  cmp.busy = true;
+  renderCmpPicker();
+  try {
+    if (!silent) {
+      renderCmpProgress(papers);
+      await prepareComparePapers(papers);
+      setCmpProgress(94, "Comparing papers…");
+    }
+    const data = await postJson("/api/compare", { paper_paths: paths });
+    cmp.cache[key] = data;
+    cmp.data = data;
+    cmp.stale = false;
+    renderCmpResult(true);
+  } catch (error) {
+    showMessage(byId("cmpResult"), "❌", "Comparison failed", error.message || "Check your API key and try again.");
+  }
+  cmp.busy = false;
+  renderCmpPicker();
+}
+
+/* --- the pieces of the result page --- */
+
+// The relatedness circle at the top
+function cmpHeroHtml(data) {
+  const r = data.relatedness;
+  const color = CMP_LEVEL_COLORS[r.level] || "var(--accent)";
+  const circle = 2 * Math.PI * 42;
+  const offset = circle - (r.percent / 100) * circle;
+
+  let sharedHtml = "";
+  const shared = data.concepts.shared.slice(0, 6);
+  if (shared.length > 0) {
+    sharedHtml = '<div class="cmp-hero-shared"><span>Shared ideas</span>';
+    for (const item of shared) {
+      sharedHtml += '<span class="cmp-mini-tag">' + escapeHtml(item.term) + "</span>";
+    }
+    sharedHtml += "</div>";
+  }
+
+  // with 3 papers we also show how related each pair is
+  let pairsHtml = "";
+  if (data.papers.length > 2) {
+    pairsHtml = '<div class="cmp-pairs">';
+    for (const pair of r.pairs) {
+      pairsHtml += `<div class="cmp-pair"><span>${cmpLetter(pair.a)} ↔ ${cmpLetter(pair.b)}</span>
+        <div class="bar"><div class="bar-fill" style="width:${pair.percent}%"></div></div><b>${pair.percent}%</b></div>`;
+    }
+    pairsHtml += "</div>";
+  }
+
+  return `<div class="cmp-card cmp-hero" style="--lvl:${color}">
+    <div class="cmp-ring">
+      <svg viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="42" class="cmp-ring-bg"/>
+        <circle cx="50" cy="50" r="42" class="cmp-ring-fg" stroke-dasharray="${circle.toFixed(1)}" stroke-dashoffset="${offset.toFixed(1)}" transform="rotate(-90 50 50)"/>
+      </svg>
+      <div class="cmp-ring-num"><b>${r.percent}%</b><span>related</span></div>
+    </div>
+    <div class="cmp-hero-body">
+      <span class="cmp-level">${escapeHtml(r.label)}</span>
+      <div class="cmp-hero-msg">${escapeHtml(r.message)}</div>
+      ${sharedHtml}${pairsHtml}
+    </div></div>`;
+}
+
+// The two button groups: Standard / Personalized and Short / Detailed
+function cmpControlsHtml(data) {
+  let note = "Scores are based on the papers only.";
+  if (cmp.mode === "pers") {
+    if (data.has_personalization) {
+      note = "Scores are lowered using the terms in your Memory.";
+    } else {
+      note = "Nothing in your Memory matches these papers yet. Explain terms in the Explain tab to personalize.";
+    }
+  }
+  return `<div class="cmp-controls">
+    <div class="cmp-ctl"><span>Difficulty view</span><div class="cmp-seg">
+      <button type="button" data-mode="base" class="${cmp.mode === "base" ? "on" : ""}">Standard</button>
+      <button type="button" data-mode="pers" class="${cmp.mode === "pers" ? "on" : ""}">Personalized for me</button></div></div>
+    <div class="cmp-ctl"><span>Detail</span><div class="cmp-seg">
+      <button type="button" data-detail="short" class="${cmp.detail === "short" ? "on" : ""}">Short</button>
+      <button type="button" data-detail="detailed" class="${cmp.detail === "detailed" ? "on" : ""}">Detailed</button></div></div>
+    <div class="cmp-note">🧠 ${escapeHtml(note)}</div></div>`;
+}
+
+// One card per paper with its score
+function cmpPaperCardsHtml(data) {
+  let modeKey = "base";
+  if (cmp.mode === "pers") {
+    modeKey = "personalized";
+  }
+
+  // the easiest paper gets a green "Easiest" tag (only if the scores really differ)
+  const scores = [];
+  for (const paper of data.papers) {
+    scores.push(paper.difficulty[modeKey].score);
+  }
+  const lowest = Math.min.apply(null, scores);
+  const highest = Math.max.apply(null, scores);
+  let easiestIndex = -1;
+  if (highest - lowest >= 0.3) {
+    easiestIndex = scores.indexOf(lowest);
+  }
+
+  let html = '<div class="cmp-papers">';
+  for (let i = 0; i < data.papers.length; i++) {
+    const paper = data.papers[i];
+    const difficulty = paper.difficulty[modeKey];
+    const baseScore = paper.difficulty.base.score;
+    const color = LABEL_COLORS[difficulty.label] || "var(--accent)";
+
+    let was = "";
+    if (cmp.mode === "pers" && difficulty.score < baseScore - 0.04) {
+      was = '<span class="cmp-was">was ' + baseScore.toFixed(1) + "</span>";
+    }
+
+    let knownLine = "";
+    const info = paper.personalization;
+    if (cmp.mode === "pers" && info && (info.known_terms_matched > 0 || info.prereqs_known > 0)) {
+      knownLine = "<div>🧠 You know " + info.known_terms_matched + " of " + info.total_technical_terms + " terms</div>";
+    }
+
+    let prereqLine = "Prerequisites not built yet";
+    if (paper.prereqs.total !== null && paper.prereqs.total !== undefined) {
+      let left = paper.prereqs.total;
+      if (cmp.mode === "pers") {
+        left = paper.prereqs.left;
+      }
+      prereqLine = left + (left === 1 ? " prerequisite" : " prerequisites") + " to learn";
+    }
+
+    let best = "";
+    if (i === easiestIndex) {
+      best = '<span class="cmp-best">Easiest</span>';
+    }
+
+    html += `<div class="cmp-card cmp-pcard" style="--pc:${cmpColor(i)}">
+      ${best}
+      <div class="cmp-pcard-top"><span class="cmp-letter lg">${cmpLetter(i)}</span>
+        <div class="cmp-pcard-title" title="${escapeHtml(paper.title)}">${escapeHtml(paper.title)}</div></div>
+      <div class="cmp-score"><b>${difficulty.score.toFixed(1)}</b><span>/ 10</span>${was}</div>
+      <span class="pill" style="${pillStyle(color)}">${escapeHtml(difficulty.label)}</span>
+      <div class="cmp-meta">
+        <div>📄 ${paper.pages || "?"} pages · ⏱ ${paper.read_minutes || "?"} min read</div>
+        <div>🎓 ${prereqLine}</div>
+        ${knownLine}
+      </div></div>`;
+  }
+  return html + "</div>";
+}
+
+// The stacked score bar card.
+// Each paper has ONE bar. The whole bar is 0 to 10. It is cut into 4 colored parts,
+// and the width of a part = how many points that part adds to the final score:
+//     points = part score (0-10) x weight of the part
+function cmpStackedCardHtml(data) {
+  let modeKey = "base";
+  if (cmp.mode === "pers") {
+    modeKey = "personalized";
+  }
+
+  // the legend: a color square + the name + the weight of each part
+  let legend = '<div class="cmp-stack-legend">';
+  for (const part of CMP_PARTS) {
+    legend += '<span class="cmp-stack-key"><i class="cmp-stack-swatch ' + part.cls + '"></i>' +
+              part.label + " (" + Math.round(part.weight * 100) + "%)</span>";
+  }
+  legend += "</div>";
+
+  // one row for each paper
+  let rows = "";
+  for (let i = 0; i < data.papers.length; i++) {
+    const paper = data.papers[i];
+    const difficulty = paper.difficulty[modeKey];
+
+    let segments = "";
+    for (const part of CMP_PARTS) {
+      const partScore = difficulty.components[part.key] || 0;
+      const points = partScore * part.weight;
+      const width = (points / 10) * 100;
+
+      // write the number inside the part only when the part is wide enough
+      let numberText = "";
+      if (width >= 8) {
+        numberText = points.toFixed(1);
+      }
+      const hint = part.label + ": " + partScore.toFixed(1) + " x " + Math.round(part.weight * 100) + "% = " + points.toFixed(2) + " points";
+      segments += '<div class="cmp-stack-part ' + part.cls + '" style="width:' + width.toFixed(1) + '%" title="' + escapeHtml(hint) + '">' + numberText + "</div>";
+    }
+
+    rows += `<div class="cmp-stack-row">
+      <span class="cmp-letter sm" style="--pc:${cmpColor(i)}">${cmpLetter(i)}</span>
+      <span class="cmp-stack-title" title="${escapeHtml(paper.title)}">${escapeHtml(cmpShort(paper.title, 24))}</span>
+      <div class="cmp-stack-track">${segments}</div>
+      <span class="cmp-stack-total">${difficulty.score.toFixed(1)}</span></div>`;
+  }
+
+  // the scale under the bars: 0 to 10
+  const scale = `<div class="cmp-stack-scale"><div class="cmp-stack-scale-line">
+    <span>0</span><span>2</span><span>4</span><span>6</span><span>8</span><span>10</span></div></div>`;
+
+  return `<div class="cmp-card">
+    <div class="cmp-h">Score breakdown</div>
+    <div class="cmp-sub">The whole bar is the final difficulty score (0 to 10). Each color shows how many points one part adds. A longer bar means a harder paper. Hover a color to see the math.</div>
+    ${legend}${rows}${scale}</div>`;
+}
+
+// Side-by-side text: what it is, problem, method, results, limits
+function cmpAspectsHtml(data) {
+  let title = "Head to head";
+  let subtitle = "What each paper solves, how it does it, and what it found.";
+  if (data.relatedness.level === "unrelated") {
+    title = "Side-by-side overview";
+    subtitle = "These papers solve different problems, so nothing is marked as better.";
+  }
+
+  let rows = "";
+  for (const aspect of CMP_ASPECTS) {
+    let cells = "";
+    for (let i = 0; i < data.papers.length; i++) {
+      const paper = data.papers[i];
+      const text = paper.sections[aspect.key][cmp.detail];
+      let mutedClass = "";
+      if (text === CMP_NOT_STATED) {
+        mutedClass = " muted";
+      }
+
+      // the "results" card also shows the key numbers of the paper
+      let numbers = "";
+      if (aspect.key === "results" && paper.key_numbers.length > 0) {
+        numbers = '<div class="cmp-kn">';
+        for (const n of paper.key_numbers) {
+          let label = "";
+          if (n.label) {
+            label = " " + escapeHtml(n.label);
+          }
+          numbers += '<span class="cmp-kn-chip"><b>' + escapeHtml(n.value) + "</b>" + label + "</span>";
+        }
+        numbers += "</div>";
+      }
+
+      cells += `<div class="cmp-cell" style="--pc:${cmpColor(i)}">
+        <div class="cmp-cell-tag"><span class="cmp-letter sm">${cmpLetter(i)}</span>${escapeHtml(cmpShort(paper.title, 30))}</div>
+        <div class="cmp-cell-text${mutedClass}">${escapeHtml(text)}</div>${numbers}</div>`;
+    }
+    rows += `<div class="cmp-aspect"><div class="cmp-aspect-head"><span>${aspect.icon}</span>${aspect.label}</div><div class="cmp-cols">${cells}</div></div>`;
+  }
+  return `<div class="cmp-card"><div class="cmp-h">${title}</div><div class="cmp-sub">${subtitle}</div>${rows}</div>`;
+}
+
+// The same number measured in each paper (not shown for unrelated papers)
+function cmpMetricsHtml(data) {
+  if (data.relatedness.level === "unrelated") {
+    return "";
+  }
+  const metricRows = data.head_to_head.rows;
+  if (metricRows.length === 0) {
+    return `<div class="cmp-card cmp-soft"><div class="cmp-h">Numbers side by side</div>
+      <div class="cmp-sub">These papers do not report the same metric, so there is no number-to-number comparison. Compare the findings above instead.</div></div>`;
+  }
+
+  let rows = "";
+  for (const row of metricRows) {
+    let biggest = 0;
+    for (const v of row.values) {
+      biggest = Math.max(biggest, Math.abs(v.num));
+    }
+    if (biggest === 0) {
+      biggest = 1;
+    }
+
+    let unit = "";
+    if (row.unit === "%") {
+      unit = "%";
+    } else if (row.unit) {
+      unit = " " + row.unit;
+    }
+
+    let cells = "";
+    for (const v of row.values) {
+      const isWinner = row.winner === v.index;
+      let winClass = "";
+      let crown = "";
+      if (isWinner) {
+        winClass = " win";
+        crown = '<span class="cmp-crown">★ Best</span>';
+      }
+      let label = "";
+      if (v.label) {
+        label = '<div class="cmp-mlabel">' + escapeHtml(v.label) + "</div>";
+      }
+      cells += `<div class="cmp-mcell${winClass}">
+        <div class="cmp-mcell-top"><span class="cmp-letter sm" style="--pc:${cmpColor(v.index)}">${cmpLetter(v.index)}</span>${crown}</div>
+        <div class="cmp-mnum">${escapeHtml(v.value)}${escapeHtml(unit)}</div>
+        <div class="bar"><div class="bar-fill" style="width:${(Math.abs(v.num) / biggest) * 100}%;background:${cmpColor(v.index)}"></div></div>
+        ${label}</div>`;
+    }
+
+    let hint = "";
+    if (row.higher_is_better === true) {
+      hint = '<span class="cmp-hint-pill">higher is better</span>';
+    } else if (row.higher_is_better === false) {
+      hint = '<span class="cmp-hint-pill">lower is better</span>';
+    }
+    rows += '<div class="cmp-metric"><div class="cmp-metric-name">' + escapeHtml(row.metric) + " " + hint + '</div><div class="cmp-cols">' + cells + "</div></div>";
+  }
+  return `<div class="cmp-card"><div class="cmp-h">Numbers side by side</div>
+    <div class="cmp-sub">Same metric, measured in each paper. Numbers come straight from the PDFs.</div>${rows}</div>`;
+}
+
+// Shared concepts and the concepts that only one paper has
+function cmpConceptsHtml(data) {
+  const shared = data.concepts.shared;
+  const unique = data.concepts.unique;
+
+  let sharedHtml = "";
+  if (data.relatedness.level !== "unrelated" && shared.length > 0) {
+    let tags = "";
+    for (const item of shared) {
+      let knownClass = "";
+      let tick = "";
+      if (item.known) {
+        knownClass = " known";
+        tick = "✓ ";
+      }
+      tags += '<button type="button" class="cmp-tag' + knownClass + '" data-term="' + escapeHtml(item.term) + '">' + tick + escapeHtml(item.term) + "</button>";
+    }
+    sharedHtml = `<div class="cmp-block"><div class="cmp-block-title">Shared concepts
+      <small>Learn these once, they help more than one paper. A tick means you already know it.</small></div><div class="cmp-tags">${tags}</div></div>`;
+  }
+
+  let uniqueHtml = "";
+  for (let i = 0; i < unique.length; i++) {
+    if (unique[i].length === 0) {
+      continue;
+    }
+    let tags = "";
+    for (const term of unique[i]) {
+      tags += '<button type="button" class="cmp-tag unique" style="--pc:' + cmpColor(i) + '" data-term="' + escapeHtml(term) + '">' + escapeHtml(term) + "</button>";
+    }
+    uniqueHtml += `<div class="cmp-block"><div class="cmp-block-title"><span class="cmp-letter sm" style="--pc:${cmpColor(i)}">${cmpLetter(i)}</span>
+      Only in ${escapeHtml(cmpShort(data.papers[i].title, 40))}</div><div class="cmp-tags">${tags}</div></div>`;
+  }
+
+  if (sharedHtml === "" && uniqueHtml === "") {
+    return "";
+  }
+  return `<div class="cmp-card"><div class="cmp-h">Concepts</div><div class="cmp-sub">Click any concept to get an instant explanation.</div>${sharedHtml}${uniqueHtml}</div>`;
+}
+
+// If two scores are almost the same, the AI verdict decides who is first
+function cmpAdjustOrder(data, steps, modeKey) {
+  const verdict = cmp.verdicts[cmpPathsKey(cmpPathsOf(data))];
+  if (!verdict || verdict.status !== "done" || !verdict.data) {
+    return steps;
+  }
+  if (data.relatedness.level === "unrelated" || steps.length < 2) {
+    return steps;
+  }
+
+  const first = "ABCD".indexOf(verdict.data.read_first);
+  if (first < 0 || !data.papers[first] || steps[0].index === first) {
+    return steps;
+  }
+
+  const firstScore = data.papers[first].difficulty[modeKey].score;
+  const topScore = data.papers[steps[0].index].difficulty[modeKey].score;
+  if (Math.abs(firstScore - topScore) > CMP_CLOSE_SCORE) {
+    return steps;                          // the scores are far apart: keep the easiest first
+  }
+
+  const newSteps = [{ index: first, reason: "Start here. The AI verdict says the other paper(s) build on this one." }];
+  for (const step of steps) {
+    if (step.index !== first) {
+      newSteps.push({ index: step.index, reason: "Read after the first paper. It builds on it, and the difficulty is almost the same." });
+    }
+  }
+  return newSteps;
+}
+
+// The inside of the reading order card
+function cmpOrderInnerHtml(data) {
+  let steps = data.reading_order.base;
+  let modeKey = "base";
+  let extra = "";
+  if (cmp.mode === "pers") {
+    steps = data.reading_order.personalized;
+    modeKey = "personalized";
+    extra = ", based on what you already know";
+  }
+  steps = cmpAdjustOrder(data, steps, modeKey);
+
+  let items = "";
+  for (let position = 0; position < steps.length; position++) {
+    const step = steps[position];
+    const paper = data.papers[step.index];
+    items += `<div class="cmp-step" style="--pc:${cmpColor(step.index)}">
+      <div class="cmp-step-num">${position + 1}</div>
+      <div><div class="cmp-step-title"><span class="cmp-letter sm">${cmpLetter(step.index)}</span>${escapeHtml(paper.title)}</div>
+      <div class="cmp-step-why">${escapeHtml(step.reason)}</div></div></div>`;
+  }
+  return `<div class="cmp-card"><div class="cmp-h">Suggested reading order</div>
+    <div class="cmp-sub">Easiest first${extra}. If two papers are almost equally hard, the AI verdict decides.</div>
+    <div class="cmp-steps">${items}</div></div>`;
+}
+
+// The reading order card (it sits in a box, so it can be redrawn when the verdict arrives)
+function cmpOrderHtml(data) {
+  return '<div id="cmpOrderBox">' + cmpOrderInnerHtml(data) + "</div>";
+}
+
+/* --- the AI verdict (loads by itself, saved after the first time) --- */
+
+function cmpVerdictShellHtml() {
+  return `<div class="cmp-card cmp-verdict">
+    <div class="cmp-verdict-head"><span>✨</span><div class="cmp-h">AI verdict</div><span class="cmp-verdict-note">Written once, then saved</span></div>
+    <div id="cmpVerdictBody"></div></div>`;
+}
+
+// What goes inside the verdict card: loading, an error, or the verdict
+function cmpVerdictInnerHtml(data) {
+  const verdict = cmp.verdicts[cmpPathsKey(cmpPathsOf(data))];
+
+  if (!verdict || verdict.status === "loading") {
+    return `<div class="shimmer" style="width:92%;height:11px"></div><div class="shimmer" style="width:78%;height:11px"></div>
+      <div class="shimmer" style="width:55%;height:11px"></div><div class="cmp-sub">Gemini is reading the summaries…</div>`;
+  }
+  if (verdict.status === "error") {
+    return '<div class="cmp-verr">' + escapeHtml(verdict.error) + '</div><button type="button" class="ghost-btn" id="cmpVerdictRetry">Try again</button>';
+  }
+
+  const result = verdict.data || {};
+  const items = result.best_for || [];
+  let bestFor = "";
+  for (const item of items) {
+    const index = "ABCD".indexOf(item.paper);
+    if (index < 0 || !data.papers[index]) {
+      continue;
+    }
+    bestFor += '<div class="cmp-bf" style="--pc:' + cmpColor(index) + '"><span class="cmp-letter sm">' + item.paper + "</span><span>" + escapeHtml(item.goal) + "</span></div>";
+  }
+  let relation = "";
+  if (result.relation) {
+    relation = '<div class="cmp-verdict-rel">' + escapeHtml(result.relation) + "</div>";
+  }
+  let bestBlock = "";
+  if (bestFor !== "") {
+    bestBlock = '<div class="cmp-bf-list">' + bestFor + "</div>";
+  }
+  return '<div class="cmp-verdict-text">' + escapeHtml(result.verdict || "No verdict was returned.") + "</div>" + relation + bestBlock;
+}
+
+// Put the verdict content into its card (and redraw the reading order, because the verdict can change it)
+function paintCmpVerdict(data) {
+  const body = byId("cmpVerdictBody");
+  if (!body) {
+    return;
+  }
+  body.innerHTML = cmpVerdictInnerHtml(data);
+  const retry = byId("cmpVerdictRetry");
+  if (retry) {
+    retry.addEventListener("click", function () {
+      delete cmp.verdicts[cmpPathsKey(cmpPathsOf(data))];
+      loadCmpVerdict(data);
+    });
+  }
+
+  const orderBox = byId("cmpOrderBox");
+  if (orderBox) {
+    orderBox.innerHTML = cmpOrderInnerHtml(data);
+  }
+}
+
+// Ask the server for the verdict (only once for each group of papers)
+async function loadCmpVerdict(data) {
+  const key = cmpPathsKey(cmpPathsOf(data));
+  const current = cmp.verdicts[key];
+  if (current && (current.status === "loading" || current.status === "done")) {
+    paintCmpVerdict(data);
+    return;
+  }
+
+  cmp.verdicts[key] = { status: "loading" };
+  paintCmpVerdict(data);
+  try {
+    const result = await postJson("/api/compare/verdict", { paper_paths: cmpPathsOf(data) });
+    cmp.verdicts[key] = { status: "done", data: result.verdict };
+  } catch (error) {
+    cmp.verdicts[key] = { status: "error", error: error.message || "Could not write the verdict." };
+  }
+  // draw it only if the user still looks at the same comparison
+  if (cmp.data && cmpPathsKey(cmpPathsOf(cmp.data)) === key) {
+    paintCmpVerdict(cmp.data);
+  }
+}
+
+// "Upload a closer paper" tip (only when the papers are not closely related)
+function cmpTipHtml(data) {
+  if (data.relatedness.level === "related") {
+    return "";
+  }
+  return `<div class="cmp-card cmp-tip"><div><div class="cmp-h">Looking for a closer match?</div>
+    <div class="cmp-sub">Upload a paper on the same topic to get a full head-to-head with matching numbers.</div></div>
+    <button type="button" class="primary-btn cmp-run" id="cmpUploadBtn">Upload a paper</button></div>`;
+}
+
+// Draw the whole comparison result (the AI verdict card is FIRST)
+function renderCmpResult(animate) {
+  const output = byId("cmpResult");
+  const data = cmp.data;
+  if (!output || !data) {
+    return;
+  }
+
+  output.classList.toggle("cmp-noanim", !animate);
+  output.innerHTML = cmpVerdictShellHtml() + cmpHeroHtml(data) + cmpControlsHtml(data) + cmpPaperCardsHtml(data) +
+    cmpStackedCardHtml(data) + cmpAspectsHtml(data) + cmpMetricsHtml(data) + cmpConceptsHtml(data) +
+    cmpOrderHtml(data) + cmpTipHtml(data);
+
+  onClickAll(output, ".cmp-seg button[data-mode]", function (button) {
+    cmp.mode = button.dataset.mode;
+    renderCmpResult(false);
+  });
+  onClickAll(output, ".cmp-seg button[data-detail]", function (button) {
+    cmp.detail = button.dataset.detail;
+    renderCmpResult(false);
+  });
+  onClickAll(output, ".cmp-tag", function (button) { openExplainFor(button.dataset.term); });
+  const uploadButton = byId("cmpUploadBtn");
+  if (uploadButton) {
+    uploadButton.addEventListener("click", function () { byId("fileInput").click(); });
+  }
+
+  loadCmpVerdict(data);
+}
+
+// Update the paper chips when the paper list changes (upload, indexing finished...)
+function refreshComparePicker() {
+  if (!byId("panel-comparison").classList.contains("active")) {
+    return;
+  }
+  if (app.papers.length < 2 || !byId("cmpPicker")) {
+    loadComparisonTab();
+    return;
+  }
+
+  cmpKeepExisting();
+
+  // redraw only when something really changed (this avoids flicker while indexing)
+  let signature = "";
+  for (const paper of app.papers) {
+    signature += paper.id + ":" + paper.indexStatus + "|";
+  }
+  signature += "#" + cmp.selected.join(",");
+  if (signature === cmp.pickerSignature) {
+    return;
+  }
+  cmp.pickerSignature = signature;
+  renderCmpPicker();
+}
+
+// Redraw the Compare tab after a theme change
+function refreshCompareColors() {
+  if (cmp.busy || !cmp.data || !byId("panel-comparison").classList.contains("active")) {
+    return;
+  }
+  renderCmpPicker();
+  renderCmpResult(false);
+}
+
+/* ---------- 11. WINDOWS (Memory + API key) ---------- */
 
 function showWindow(id, show) {
   byId(id).style.display = show ? "flex" : "none";
@@ -2015,7 +3174,7 @@ async function openMemoryModal() {
 function closeMemoryModal() {
   showWindow("memoryModalOverlay", false);
   const tab = getActiveTabName();                    // refresh the tabs that depend on Memory
-  if (tab === "insights" || tab === "prerequisites") {
+  if (tab === "insights" || tab === "prerequisites" || tab === "comparison") {
     switchTab(tab);
   }
 }
@@ -2148,7 +3307,38 @@ async function removeApiKey() {
   }
 }
 
-/* ---------- 11. TABS AND START ---------- */
+/* ---------- 12. THEME, TABS AND START ---------- */
+
+// Switch the theme. This is the ONLY place that changes the theme:
+//   1. the class "dark" on the page changes all the colors (see PART 2: CSS),
+//   2. the icon changes (sun in dark mode, moon in light mode),
+//   3. the choice is saved, so the next visit looks the same.
+function applyTheme(isDark, save) {
+  document.body.classList.toggle("dark", isDark);
+  setText("darkIcon", isDark ? "☀️" : "🌙");
+
+  if (save) {
+    try {
+      localStorage.setItem(KEY_DARK, String(isDark));
+    } catch (error) {
+      // the browser does not allow saving: the theme still works until you close the page
+    }
+  }
+
+  // redraw the Compare tab, but never let a chart problem stop the theme
+  try {
+    refreshCompareColors();
+  } catch (error) {
+    console.warn("Could not redraw the Compare tab:", error);
+  }
+}
+
+// The Theme button: switch to the other theme.
+// We look at the real page (not at a saved variable), so the button can never be out of step.
+function toggleDark() {
+  const isDarkNow = document.body.classList.contains("dark");
+  applyTheme(!isDarkNow, true);
+}
 
 // The name of the open tab, for example "chat"
 function getActiveTabName() {
@@ -2165,14 +3355,7 @@ function switchTab(name) {
   if (name === "summary") { loadSummaryTab(false); }
   else if (name === "insights") { loadInsightsTab(); }
   else if (name === "prerequisites") { loadPrerequisitesTab(); }
-}
-
-// The light / dark switch (it is remembered for next time)
-function toggleDark() {
-  app.isDark = !app.isDark;
-  document.body.classList.toggle("dark", app.isDark);
-  setText("darkIcon", app.isDark ? "☀️" : "🌙");
-  localStorage.setItem(KEY_DARK, String(app.isDark));
+  else if (name === "comparison") { loadComparisonTab(); }
 }
 
 // The file picker, drag-and-drop, and the button that hides the PDF panel
@@ -2265,11 +3448,14 @@ document.addEventListener("keydown", function (event) {
 
 // Runs ONE time when the page opens
 async function init() {
-  if (localStorage.getItem(KEY_DARK) === "true") {
-    app.isDark = true;
-    document.body.classList.add("dark");
-    setText("darkIcon", "☀️");
+  let savedDark = false;
+  try {
+    savedDark = localStorage.getItem(KEY_DARK) === "true";
+  } catch (error) {
+    savedDark = false;
   }
+  applyTheme(savedDark, false);
+
   byId("pdfBody").innerHTML = PDF_PLACEHOLDER;
   setupUploadButtons();
   setupResizeHandle();

@@ -3,20 +3,19 @@ prerequisite_extractor.py  -  make a learning roadmap for a paper (12 to 15 topi
 
 HOW THIS FILE WORKS (easy words)
 ------------------------------------------------------------
-1. Clean the paper text and cut out the title, the abstract and the introduction.
-2. Ask Gemini (call 1): "List the core concepts needed to understand this paper."
-3. Ask Gemini (call 2): "Turn those concepts into a roadmap from beginner to advanced,
-   as a numbered list:   1. Topic: short explanation"
-4. Clean the answer: remove markdown and duplicates, number it again from 1.
+1. Clean the paper text and cut out the title, a SHORT part of the abstract
+   and a SHORT part of the introduction (this keeps the tokens low).
+2. Ask Gemini ONE time: "Think about the core concepts, then write a roadmap
+   from beginner to advanced, as a numbered list:   1. Topic: short explanation"
+3. Clean the answer: remove markdown and duplicates, number it again from 1.
 
 FUNCTION GUIDE
 ------------------------------------------------------------
    clean_text             tidy the paper text
    find_title             the first line that looks like a title
-   find_abstract          the abstract part of the paper
-   find_introduction      the introduction part of the paper
-   concept_prompt         the instruction for Gemini call 1
-   roadmap_prompt         the instruction for Gemini call 2
+   find_abstract          the abstract part of the paper (short)
+   find_introduction      the introduction part of the paper (short)
+   roadmap_prompt         the ONE instruction for Gemini
    clean_roadmap          clean and renumber the answer
    extract_prerequisites  the main function
 """
@@ -24,6 +23,10 @@ FUNCTION GUIDE
 import re
 
 from model_config import generate_text
+
+ABSTRACT_LIMIT = 2000       # the most letters we take from the abstract
+INTRO_LIMIT = 4000          # the most letters we take from the introduction
+MIN_INTRO_LETTERS = 500     # a shorter introduction is probably a wrong cut, so we keep more
 
 
 def clean_text(text):
@@ -46,8 +49,8 @@ def find_title(raw_text):
 def find_abstract(text):
     start = text.lower().find("abstract")
     if start == -1:
-        return text[:4000]
-    piece = text[start:start + 6000]
+        return text[:ABSTRACT_LIMIT]
+    piece = text[start:start + ABSTRACT_LIMIT]
     end = piece.lower().find("introduction")
     if end != -1:
         piece = piece[:end]
@@ -57,8 +60,8 @@ def find_abstract(text):
 def find_introduction(text):
     start = text.lower().find("introduction")
     if start == -1:
-        return text[:6000]
-    piece = text[start:start + 10000]
+        return text[:INTRO_LIMIT]
+    piece = text[start:start + INTRO_LIMIT]
     lower = piece.lower()
 
     stop_positions = []
@@ -67,36 +70,19 @@ def find_introduction(text):
         if position != -1:
             stop_positions.append(position)
     if stop_positions:
-        piece = piece[:min(stop_positions)]
+        cut_at = min(stop_positions)
+        if cut_at >= MIN_INTRO_LETTERS:       # a very early cut is probably a wrong one
+            piece = piece[:cut_at]
     return piece.strip()
 
 
-def concept_prompt(title, abstract, intro):
-    return f"""
-Extract the core concepts required to understand this research paper.
-
-RULES:
-- Return 15 to 25 concepts.
-- One concept per line.
-- No explanations, numbering, bullet points, or markdown.
-- Focus on technical concepts, theories, algorithms, methods, and prerequisite knowledge.
-
-TITLE:
-{title}
-
-ABSTRACT:
-{abstract}
-
-INTRODUCTION:
-{intro}
-"""
-
-
-def roadmap_prompt(concepts):
+def roadmap_prompt(title, abstract, intro):
     return f"""
 You are an academic prerequisite extraction system.
 
-Convert the concepts below into a learning roadmap.
+Read the paper opening below. Think silently about the core concepts a student
+must know to understand this paper (theories, algorithms, methods).
+Then pick the 12 to 15 most important ones and write a learning roadmap.
 
 RULES:
 - Output exactly 12 to 15 prerequisites.
@@ -109,8 +95,14 @@ RULES:
 - No markdown, bullet points, headings, or extra text.
 - Output ONLY the numbered list.
 
-CONCEPTS:
-{concepts}
+TITLE:
+{title}
+
+ABSTRACT:
+{abstract}
+
+INTRODUCTION:
+{intro}
 """
 
 
@@ -133,6 +125,5 @@ def extract_prerequisites(raw_text, api_key=None):
     title = find_title(raw_text)
     text = clean_text(raw_text)
 
-    concepts = generate_text(concept_prompt(title, find_abstract(text), find_introduction(text)), api_key)
-    roadmap = generate_text(roadmap_prompt(concepts), api_key)
+    roadmap = generate_text(roadmap_prompt(title, find_abstract(text), find_introduction(text)), api_key)
     return clean_roadmap(roadmap)
