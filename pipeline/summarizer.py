@@ -197,7 +197,8 @@ def is_top_heading(line):
 
 
 def find_heading_lines(lines):
-    """For each part, the number of the line where its heading is (the first one we see)."""
+    """For each part, the number of the line where its heading is (the first one we see).
+    We get back: a dictionary like {"abstract": 3, "method": 80}. This means the abstract starts at line 3 and the method at line 80."""
     found = {}
     for number in range(len(lines)):
         cleaned = clean_heading(lines[number])
@@ -215,7 +216,10 @@ def find_heading_lines(lines):
 
 
 def find_section_end(lines, start):
-    """The line number where the part ends: the next main heading, or the end of the text."""
+    """The line number where the part ends: the next main heading, or the end of the text.
+    
+    Start looking at the line after the heading. The first main heading we meet is the end. If there is none, the part goes to the end of the paper.
+    """
     for number in range(start + 1, len(lines)):
         if is_top_heading(lines[number]):
             return number
@@ -223,7 +227,13 @@ def find_section_end(lines, start):
 
 
 def find_sections(full_text):
-    """LAYER 1. Returns a dictionary: part name -> text of that part (only the parts we found)."""
+    """LAYER 1. Returns a dictionary: part name -> text of that part (only the parts we found).
+    Cut the references and split the paper into lines.
+Find where each part starts.
+For each part we found: find where it ends, join those lines into one text, and keep only the allowed number of letters.
+If the text has at least 300 letters, keep it. If it has less, throw it away. It counts as “missing”.
+    """
+
     lines = cut_references(full_text).split("\n")
     starts = find_heading_lines(lines)
 
@@ -244,7 +254,9 @@ def find_sections(full_text):
 # LAYER 2: search with ChromaDB (free, no Gemini)
 # ---------------------------------------------------------------
 def search_missing_part(part, collection_name):
-    """Ask ChromaDB a question about the part. Returns the best chunks joined as one text."""
+    """Ask ChromaDB a question about the part. Returns the best chunks joined as one text.
+    
+    Take the question for this part. Ask ChromaDB for the 6 best chunks. Join them into one text. Cut it to the size limit. Give it back."""
     question = SEARCH_QUESTIONS[part]
     chunks = retrieve_relevant_chunks(question, collection_name=collection_name, top_k=6)
     text = "\n".join(chunks[:6])
@@ -279,7 +291,11 @@ def collect_parts(full_text, collection_name):
             blocks.append("[" + PART_TITLES[part] + "]\n" + sections[part])
     return "\n\n".join(blocks)
 
-
+""" Cut the references.
+Safety 1: if the paper is 16000 letters or less, send the whole paper.
+Otherwise, collect the important parts (Layer 1 + Layer 2).
+Safety 2: if all parts together are under 1500 letters, our search failed. Use the old way (the whole paper, trimmed).
+If both safety checks pass, send only the important parts. """
 def pick_text(full_text, collection_name):
     """Choose the text we send to Gemini. This is where the safety rules are."""
     body = cut_references(full_text)
@@ -359,7 +375,13 @@ Return ONLY valid JSON, no markdown, no extra text, in exactly this shape:
 
 
 def parse_json(raw_answer):
-    """Turn Gemini's answer into a Python dictionary."""
+    """Turn Gemini's answer into a Python dictionary.
+    
+    Sometimes Gemini wraps the answer in a markdown code fence (```json ... ```). 
+    First we remove that. 
+    Then we find the first { and the last } and keep only what is between them.
+     If there is no {, we raise an error (stop with a message).
+    """
     raw_answer = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_answer.strip())
     start = raw_answer.find("{")
     end = raw_answer.rfind("}")
