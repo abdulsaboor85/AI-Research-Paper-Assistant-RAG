@@ -27,6 +27,18 @@
  The Summary tab has a Short view (1-2 sentences) and a Detailed view
  (4-5 short points, one point per line).
 
+ The Explain tab (and the small popup in the PDF) knows 3 kinds of answers:
+ a TERM, a FORMULA and a TABLE. The server finds out which one you selected
+ and sends back the matching parts (symbols, a rebuilt table...).
+ Every answer shows only the important cards. What the paper says is in a
+ CLOSED box ("Show what the paper says"), so the page stays short and clean.
+ A FORMULA answer has these cards: the formula, "Say It Out Loud" (the formula
+ in words), "In Simple Words", "Break It Into Parts", "Every Symbol" (a word
+ like softmax is clickable and opens its own explanation), the number example,
+ and the closed box with what the paper says.
+ The popup shows a short answer. Its button opens the full answer in the
+ Explain tab. Only real concepts are saved to Memory (the server decides).
+
  The theme (light / dark): ONE function, applyTheme(), does everything.
  It puts the class "dark" on the page, changes the icon and saves your choice.
 
@@ -68,6 +80,8 @@
    buildTextLayer    make PDF words selectable
    openPopupAt / setPopupHtml / positionPopup / closePopup   floating popup
    popupCard / popupSection   pieces of the popup
+   popupBody         the short answer shown in the popup
+   showFullExplanation   open a popup answer in the Explain tab
    getSelectedTerm / showExplainButton / explainSelectedTerm / setupPdfSelection
                      "select a word in the PDF, then click Explain"
    openFullscreen / closeFullscreen / renderFullscreenPage /
@@ -89,8 +103,18 @@
  8. EXPLAIN TAB
    openExplainFor    jump to the Explain tab with a term
    startExplainProgress  the friendly loading bar
-   explainTerm       ask the server to explain a term
-   renderExplainResult  draw the explanation
+   explainKey        one text key for a question
+   fetchExplanation  get an answer (page memory first, then server)
+   explainTerm       explain what is typed in the Explain box
+   explainCardHtml   one answer card
+   paperDetailsHtml  the CLOSED box "Show what the paper says"
+   symbolRowsHtml    a symbol + meaning table (some symbols are clickable)
+   explainTableHtml  a rebuilt paper table
+   termCardsHtml     the cards of a term answer
+   formulaExampleHtml  the number example of a formula (only if Python checked it)
+   formulaCardsHtml  the cards of a formula answer
+   tableCardsHtml    the cards of a table answer
+   renderExplainResult  draw the answer
    handleExplainKey  Enter starts the explanation
  9. SUMMARY TAB
    withUnit          "94" + "%" -> "94%"
@@ -388,16 +412,33 @@ button, input, textarea { font-family: inherit; }
 
 .explain-search { display: flex; gap: 10px; margin-bottom: 20px; }
 .explain-input { flex: 1; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font-size: 13px; }
-.explain-badge { display: inline-block; padding: 4px 12px; border-radius: 99px; font-size: 11px; font-weight: 600; margin-bottom: 16px; border: 1px solid; }
-.explain-term { font-size: 22px; font-weight: 700; margin-bottom: 20px; letter-spacing: -0.3px; }
+.explain-badge { display: inline-block; padding: 4px 12px; border-radius: 99px; font-size: 11px; font-weight: 600; margin-bottom: 16px; margin-right: 8px; border: 1px solid; }
+.explain-term { font-size: 22px; font-weight: 700; margin-bottom: 20px; letter-spacing: -0.3px; overflow-wrap: anywhere; }
 .explain-card { border-left: 3px solid var(--accent); padding: 18px 20px; margin-bottom: 14px; }
 .explain-card.green { border-left-color: var(--green); }
 .explain-card.amber { border-left-color: var(--amber); background: var(--amber-soft); }
+.explain-card.red { border-left-color: var(--red); background: var(--red-soft); }
 .explain-card-title { font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
 .explain-card-text { font-size: 13.5px; line-height: 1.75; }
 .explain-card.amber .explain-card-text { font-style: italic; }
 .explain-hint { font-size: 11px; color: var(--text3); text-align: center; }
 .skeleton { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; opacity: 0.5; margin-bottom: 10px; }
+
+.explain-what { font-size: 15px; font-weight: 600; line-height: 1.6; margin-bottom: 16px; }
+.explain-formula { font-family: ui-monospace, Consolas, monospace; font-size: 15px; line-height: 1.7; background: var(--surface2); border: 1px solid var(--border2); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.explain-raw { font-size: 11px; color: var(--text3); margin-bottom: 16px; overflow-wrap: anywhere; }
+.explain-scroll { overflow-x: auto; }
+.explain-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.explain-table th, .explain-table td { border: 1px solid var(--border2); padding: 8px 10px; text-align: left; vertical-align: top; }
+.explain-table th { background: var(--surface2); font-weight: 600; }
+.explain-symbol { font-family: ui-monospace, Consolas, monospace; font-weight: 600; color: var(--accent); white-space: nowrap; }
+.explain-symbol-link { cursor: pointer; text-decoration: underline dotted; }
+.explain-symbol-link:hover { background: var(--accent-soft); }
+.explain-math { font-family: ui-monospace, Consolas, monospace; font-style: normal; font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
+.explain-checked { font-style: normal; font-size: 11px; color: var(--text3); margin-top: 10px; }
+/* the closed box "Show what the paper says" */
+.explain-details { padding: 14px 18px; }
+.explain-details summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
 
 /* ---------- 8. SUMMARY ---------- */
 #summaryContent { max-width: 760px; margin: 0 auto; }
@@ -617,6 +658,9 @@ button, input, textarea { font-family: inherit; }
 .popup-close { background: transparent; border: none; font-size: 18px; cursor: pointer; color: var(--text2); line-height: 1; }
 .popup-section { font-size: 12.5px; color: var(--text2); line-height: 1.6; margin-bottom: 10px; }
 .popup-section b { color: var(--text); }
+.popup-card .popup-open { margin-top: 4px; }
+.save-memory-btn { margin-top: 8px; }
+.save-memory-btn:disabled { opacity: 0.65; cursor: default; }
 </style>
 </head>
 
@@ -727,7 +771,7 @@ button, input, textarea { font-family: inherit; }
           <div class="content-panel">
             <div class="section-title">Term Explainer</div>
             <div class="explain-search">
-              <input type="text" id="explainInput" class="explain-input" placeholder="Type a term... e.g. backpropagation, entropy, LSTM" onkeydown="handleExplainKey(event)" />
+              <input type="text" id="explainInput" class="explain-input" placeholder="Type a term, a formula or Table 1... e.g. backpropagation, LSTM, Table 1" onkeydown="handleExplainKey(event)" />
               <button class="primary-btn" onclick="explainTerm()">Explain</button>
             </div>
             <div id="explainContent"></div>
@@ -797,7 +841,7 @@ button, input, textarea { font-family: inherit; }
         <div class="modal-title">🧠 Your Memory</div>
         <button class="modal-close" onclick="closeMemoryModal()">×</button>
       </div>
-      <p class="modal-sub">Every term you explain is saved here. Known terms are removed from the Prerequisites roadmap and lower your Difficulty Score. Forget a term and it comes back into both.</p>
+      <p class="modal-sub">Every real concept you explain is saved here (formulas, tables and names of people are not). Known terms are removed from the Prerequisites roadmap and lower your Difficulty Score. Forget a term and it comes back into both.</p>
       <div class="memory-header-row">
         <span class="memory-count" id="memoryCount">0 terms learned</span>
         <button class="forget-btn" id="memoryClearAllBtn" onclick="deleteAllKnownTerms()">Forget All</button>
@@ -1388,6 +1432,38 @@ function closePopup() {
   }
 }
 
+// The "Save to Memory" button (only for a real concept term)
+function saveButtonHtml(data) {
+  if (!data.can_save) {
+    return "";
+  }
+  if (data.saved_to_memory) {
+    return '<button type="button" class="popup-trigger save-memory-btn" disabled>✅ Saved to Memory</button>';
+  }
+  return '<button type="button" class="popup-trigger save-memory-btn">🧠 Save to Memory</button>';
+}
+
+// Make the Save button work (in the popup and in the Explain tab)
+function bindSaveButton(root, data) {
+  const button = root.querySelector(".save-memory-btn");
+  if (!button || button.disabled) {
+    return;
+  }
+  button.addEventListener("click", async function () {
+    button.disabled = true;
+    try {
+      await postJson("/api/known-terms/add", { term: data.term });
+      data.saved_to_memory = true;               // the page memory changes too
+      button.textContent = "✅ Saved to Memory";
+      clearSavedResults();                       // Prerequisites and Score must update
+      showToast('"' + data.term + '" saved to Memory.');
+    } catch (error) {
+      button.disabled = false;
+      showToast(error.message || "Could not save");
+    }
+  });
+}
+
 // A popup card with a title and some sections
 function popupCard(title, sections) {
   return '<div class="popup-card"><div class="popup-card-head"><strong>' + escapeHtml(title) +
@@ -1395,7 +1471,36 @@ function popupCard(title, sections) {
 }
 
 function popupSection(label, text) {
-  return '<div class="popup-section"><b>' + label + "</b> " + escapeHtml(text) + "</div>";
+  return '<div class="popup-section"><b>' + label + "</b><div>" + escapeHtml(text) + "</div></div>";
+}
+
+// The short answer for the small popup
+function popupBody(data) {
+  let sections = "";
+  if (data.kind === "formula") {
+    sections += '<div class="explain-formula">' + escapeHtml(data.clean || data.term) + "</div>";
+    sections += '<div class="explain-raw">Rebuilt by AI. Check it in the PDF.</div>';
+    sections += popupSection("💡 In Simple Words", data.simple_explanation);
+  } else if (data.kind === "table") {
+    sections += popupSection("💡 Easy Translation", data.what || "No translation was returned.");
+    sections += popupSection("⭐ Key Takeaway", data.takeaway || "No takeaway was returned.");
+  } else {
+    sections += popupSection("💡 In Simple Words", data.simple_explanation || "No explanation was returned.");
+    sections += popupSection("📄 From the Paper", data.from_paper);
+    const example = (data.real_world_example || "").replace(/^example\s*:\s*/i, "");
+    if (example) {
+      sections += popupSection("🌍 Example", example);
+    }
+  }
+  return sections;
+}
+
+// Open an answer from the popup in the Explain tab (formulas and tables need the room)
+function showFullExplanation(term, data) {
+  closeFullscreen();                       // the big PDF view would hide the Explain tab
+  switchTab("explain");
+  byId("explainInput").value = term;
+  renderExplainResult(data);
 }
 
 /* --- select a word in the PDF, then click "Explain" --- */
@@ -1429,7 +1534,7 @@ function showExplainButton(term, x, y) {
   });
 }
 
-// Ask the server to explain the selected term
+// Ask the server to explain the selected text (a term, a formula or a table)
 async function explainSelectedTerm(term, popup) {
   const paper = getActivePaper();
   if (!paper) {
@@ -1438,16 +1543,24 @@ async function explainSelectedTerm(term, popup) {
   }
   setPopupHtml(popup, '<div class="popup-loading">Explaining "' + escapeHtml(term) + '"…</div>');
   try {
-    const data = await postJson("/api/explain", { term: term, paper_path: paper.path });
-    clearSavedResults();
-    const example = (data.real_world_example || "").replace(/^example\s*:\s*/i, "");
-    let sections = popupSection("From paper:", data.from_paper || "Not explained in the retrieved paper context.");
-    sections += popupSection("Simple:", data.simple_explanation || "No simple explanation was returned.");
-    if (example) {
-      sections += popupSection("Example:", example);
+    const data = await fetchExplanation(term, paper);
+    let title = data.term || "Explanation";
+    if (data.kind === "formula") {
+      title = "Formula";
     }
-    setPopupHtml(popup, popupCard(data.term || "Explanation", sections));
-    showToast('"' + term + '" saved to Memory.');
+    let sections = popupBody(data);
+    if (data.kind === "term") {
+      sections += saveButtonHtml(data);
+    } else {
+      sections += '<button type="button" class="popup-trigger popup-open">See more</button>';
+    }
+    setPopupHtml(popup, popupCard(title, sections));
+    bindSaveButton(popup, data);
+
+    const openButton = popup.querySelector(".popup-open");
+    if (openButton) {
+      openButton.addEventListener("click", function () { showFullExplanation(term, data); });
+    }
   } catch (error) {
     setPopupHtml(popup, '<div class="popup-error">' + escapeHtml(error.message || "Failed to explain") + "</div>");
   }
@@ -1952,6 +2065,12 @@ const EXPLAIN_STEPS = [
   { percent: 95, label: "Waiting for Gemini response…", wait: 0 }
 ];
 
+// The names of the 3 kinds of answers (the server decides the kind)
+const EXPLAIN_KIND_NAMES = { term: "Term", formula: "Formula", table: "Table" };
+
+// The text the server writes when the paper says nothing about a formula (keep it equal to NOT_IN_PAPER in pipeline/term_explainer.py)
+const NOT_IN_PAPER_TEXT = "Not explained in the retrieved paper text.";
+
 // Make the loading bar move. Returns a function that stops it.
 function startExplainProgress() {
   let step = 0;
@@ -1982,7 +2101,43 @@ function startExplainProgress() {
   };
 }
 
-// Ask the server to explain the term typed in the box
+// One text key for a question: the same paper and the same text give the same key
+function explainKey(term, paper) {
+  return paper.id + "::" + term.toLowerCase();
+}
+
+// Get an answer. The page memory is asked first, so the same question costs nothing twice.
+// Get an explanation and cache the result.
+// Save real concepts to Memory and refresh dependent scores.
+async function fetchExplanation(term, paper) {
+  const key = explainKey(term, paper);
+
+  // Return the cached answer if we already have one.
+  if (app.explained[key]) {
+    return app.explained[key];
+  }
+
+  // Ask the server for the explanation.
+  const data = await postJson("/api/explain", {
+    term: term,
+    paper_path: paper.path
+  });
+
+  // Cache the explanation.
+  app.explained[key] = data;
+
+  // Refresh scores only when the server confirms Memory was updated.
+  if (data.saved_to_memory) {
+    clearSavedResults();
+    showToast(
+      '"' + term + '" saved to Memory. Prerequisites and Difficulty Score will update.'
+    );
+  }
+
+  return data;
+}
+
+// Explain what is typed in the Explain box
 async function explainTerm() {
   const input = byId("explainInput");
   const panel = byId("explainContent");
@@ -1993,7 +2148,7 @@ async function explainTerm() {
   if (!paper) { showToast("Upload or select a paper first"); return; }
   if (isIndexing(paper)) { showToast("Paper is still being indexed."); return; }
 
-  const key = paper.id + "::" + term.toLowerCase();
+  const key = explainKey(term, paper);
   if (app.explained[key]) {
     renderExplainResult(app.explained[key]);
     return;
@@ -2007,52 +2162,174 @@ async function explainTerm() {
       </div>
       <div class="bar"><div class="bar-fill" id="explainFill" style="width:0%"></div></div>
       <div class="small-label" id="explainLabel" style="margin-bottom:18px;">Starting…</div>
-      <div class="skeleton"><div class="tiny-label" style="margin-bottom:9px;">📄 From This Paper</div><div class="shimmer" style="width:82%"></div><div class="shimmer" style="width:65%"></div></div>
       <div class="skeleton"><div class="tiny-label" style="margin-bottom:9px;">💡 In Simple Words</div><div class="shimmer" style="width:82%"></div><div class="shimmer" style="width:65%"></div></div>
       <div class="skeleton"><div class="tiny-label" style="margin-bottom:9px;">🌍 Real-World Example</div><div class="shimmer" style="width:82%"></div><div class="shimmer" style="width:65%"></div></div>
     </div>`;
   const stopProgress = startExplainProgress();
 
   try {
-    const data = await postJson("/api/explain", { term: term, paper_path: paper.path });
+    const data = await fetchExplanation(term, paper);
     stopProgress();
-    app.explained[key] = data;
     renderExplainResult(data);
-    clearSavedResults();           // the server saved this term in Memory, so the scores change
-    showToast('"' + term + '" saved to Memory. Prerequisites and Difficulty Score will drop.');
   } catch (error) {
     stopProgress();
     showMessage(panel, "❌", "Explanation Failed", error.message || "Check your API key.");
   }
 }
 
-// Draw the explanation
-function renderExplainResult(data) {
-  const panel = byId("explainContent");
+// One answer card. "bodyHtml" must already be safe HTML. "colorClass" is "", "green", "amber" or "red".
+function explainCardHtml(title, bodyHtml, colorClass) {
+  return `<div class="card explain-card ${colorClass}">
+    <div class="explain-card-title">${title}</div>
+    <div class="explain-card-text">${bodyHtml}</div></div>`;
+}
 
-  let badgeColor = "var(--amber)";
-  let badgeText = "Not in paper. Using general knowledge";
-  if (data.found_in_paper) {
-    badgeColor = "var(--green)";
-    badgeText = "Found in paper (" + data.chunks_used + (data.chunks_used === 1 ? " section)" : " sections)");
+// A closed box. The student opens it only if they want to see what the paper says.
+function paperDetailsHtml(text) {
+  if (!text) {
+    return "";
   }
+  return `<details class="card explain-details">
+    <summary>📄 Show what the paper says</summary>
+    <div class="explain-card-text" style="margin-top:10px;">${escapeHtml(text)}</div></details>`;
+}
 
-  let exampleCard = "";
+// A small table: a symbol on the left, its meaning on the right.
+// If "canClick" is true, a symbol that is a plain word (like softmax) can be clicked to explain it.
+function symbolRowsHtml(items, canClick) {
+  let html = '<div class="explain-scroll"><table class="explain-table"><tbody>';
+  for (const item of items) {
+    let cellClass = "explain-symbol";
+    let extra = "";
+    if (canClick && /^[A-Za-z]{4,}$/.test(item.symbol)) {
+      cellClass = "explain-symbol explain-symbol-link";
+      extra = ' data-term="' + escapeHtml(item.symbol) + '" title="Click to explain"';
+    }
+    html += '<tr><td class="' + cellClass + '"' + extra + ">" + escapeHtml(item.symbol) + "</td><td>" + escapeHtml(item.meaning) + "</td></tr>";
+  }
+  return html + "</tbody></table></div>";
+}
+
+// The table of the paper, rebuilt: a header row and the data rows
+function explainTableHtml(columns, rows) {
+  let html = '<div class="explain-scroll"><table class="explain-table"><thead><tr>';
+  for (const column of columns) {
+    html += "<th>" + escapeHtml(column) + "</th>";
+  }
+  html += "</tr></thead><tbody>";
+  for (const row of rows) {
+    html += "<tr>";
+    for (const cell of row) {
+      html += "<td>" + escapeHtml(cell) + "</td>";
+    }
+    html += "</tr>";
+  }
+  return html + "</tbody></table></div>";
+}
+
+// The cards of a plain term: simple words, example, and a closed box for the paper
+// A term: simple words, the paper, an example, and the Save button
+function termCardsHtml(data) {
+  let html = explainCardHtml("💡 In Simple Words", escapeHtml(data.simple_explanation), "green");
+  html += explainCardHtml("📄 From the Paper", escapeHtml(data.from_paper), "");
   if (data.real_world_example) {
     const example = data.real_world_example.replace(/^example\s*:\s*/i, "").trim();
-    exampleCard = `<div class="card explain-card amber">
-      <div class="explain-card-title">🌍 Real-World Example</div>
-      <div class="explain-card-text">"${escapeHtml(example)}"</div></div>`;
+    html += explainCardHtml("🌍 Example", escapeHtml(example), "amber");
+  }
+  html += saveButtonHtml(data);
+  return html;
+}
+
+// The number example of a formula (only if Python checked every line)
+function formulaExampleHtml(data) {
+  if (data.example_steps.length === 0) {
+    return "";
+  }
+  const intro = (data.real_world_example || "").replace(/^example\s*:\s*/i, "").trim();
+  let source = "Made-up numbers, only to show how it works.";
+  if (data.example_source === "paper") {
+    source = "Numbers taken from the paper.";
+  }
+  let body = '<div class="explain-checked" style="margin:0 0 8px;">' + source + "</div>" + escapeHtml(intro);
+  for (const line of data.example_steps) {
+    body += '<div class="explain-math">' + escapeHtml(line) + "</div>";
+  }
+  if (data.math_checked > 0) {
+    body += '<div class="explain-checked">🧮 ' + data.math_checked + " arithmetic line(s) double-checked by Python.</div>";
+  }
+  return explainCardHtml("🔢 Example", body, "amber");
+}
+
+// A formula: the formula, say it out loud, simple words, the parts, every symbol, the example, the paper
+function formulaCardsHtml(data) {
+  const parts = data.parts || [];
+  let html = '<div class="explain-formula">' + escapeHtml(data.clean || data.term) + "</div>";
+  html += '<div class="explain-raw">Rebuilt by AI from your selection, so check it against the PDF. You selected: ' + escapeHtml(data.term) + "</div>";
+  if (data.read_aloud) {
+    html += explainCardHtml("🗣️ Say It Out Loud", escapeHtml(data.read_aloud), "");
+  }
+  html += explainCardHtml("💡 In Simple Words", escapeHtml(data.simple_explanation), "green");
+  if (parts.length > 0) {
+    html += explainCardHtml("🧩 Break It Into Parts", symbolRowsHtml(parts, false), "");
+  }
+  if (data.symbols.length > 0) {
+    html += explainCardHtml("🔤 Every Symbol", symbolRowsHtml(data.symbols, true), "");
+  }
+  html += formulaExampleHtml(data);
+  if (data.from_paper && data.from_paper !== NOT_IN_PAPER_TEXT) {
+    html += paperDetailsHtml(data.from_paper);
+  }
+  return html;
+}
+
+// A table: easy translation, takeaway, the table, the letters, how to read it (no Memory button)
+function tableCardsHtml(data) {
+  let html = "";
+  if (data.what) {
+    html += explainCardHtml("💡 Easy Translation", escapeHtml(data.what), "green");
+  }
+  if (data.takeaway) {
+    html += explainCardHtml("⭐ Key Takeaway", escapeHtml(data.takeaway), "");
+  }
+  if (data.notice) {
+    html += explainCardHtml("⚠️ Please Check", escapeHtml(data.notice), "red");
+  }
+  if (data.rows.length > 0) {
+    html += explainCardHtml("📊 The Table, Rebuilt", explainTableHtml(data.columns, data.rows), "");
+  }
+  if (data.legend.length > 0) {
+    html += explainCardHtml("🔤 What Each Letter Means", symbolRowsHtml(data.legend, false), "green");
+  }
+  html += explainCardHtml("💡 How To Read It", escapeHtml(data.simple_explanation), "green");
+  return html;
+}
+
+// Draw the answer in the Explain tab
+function renderExplainResult(data) {
+  const panel = byId("explainContent");
+  const kind = data.kind || "term";
+  const kindName = EXPLAIN_KIND_NAMES[kind] || "Term";
+
+  let title = "";
+  if (kind !== "formula") {
+    const term = data.term.charAt(0).toUpperCase() + data.term.slice(1);
+    title = '<div class="explain-term">' + escapeHtml(term) + "</div>";
   }
 
-  const term = data.term.charAt(0).toUpperCase() + data.term.slice(1);
+  let cards = termCardsHtml(data);
+  if (kind === "formula") {
+    cards = formulaCardsHtml(data);
+  } else if (kind === "table") {
+    cards = tableCardsHtml(data);
+  }
+
   panel.innerHTML = `
-    <span class="explain-badge" style="${pillStyle(badgeColor)}">${escapeHtml(badgeText)}</span>
-    <div class="explain-term">${escapeHtml(term)}</div>
-    <div class="card explain-card"><div class="explain-card-title">📄 From This Paper</div><div class="explain-card-text">${escapeHtml(data.from_paper)}</div></div>
-    <div class="card explain-card green"><div class="explain-card-title">💡 In Simple Words</div><div class="explain-card-text">${escapeHtml(data.simple_explanation)}</div></div>
-    ${exampleCard}
-    <div class="explain-hint">Type another term above and click Explain to look it up.</div>`;
+    <span class="explain-badge" style="${pillStyle("var(--accent)")}">${kindName}</span>
+    ${title}
+    ${cards}
+    <div class="explain-hint">Type another term, formula or table name above and click Explain.</div>`;
+  bindSaveButton(panel, data);
+  onClickAll(panel, ".explain-symbol-link", function (cell) { openExplainFor(cell.dataset.term); });
 }
 
 // Enter starts the explanation

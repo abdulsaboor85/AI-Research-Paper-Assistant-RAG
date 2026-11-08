@@ -1,3 +1,5 @@
+# app.py
+
 """
 app.py  -  the MAIN file. Start the website with:  python app.py
 
@@ -14,6 +16,8 @@ Example: the route "/api/upload" means "please save this PDF".
 
 The cache: asking Gemini is slow, so after the first answer we SAVE it as a
 small file in the cache/ folder. Next time we just read the file.
+Explain answers are saved too, so the same term, formula or table costs no tokens twice.
+For a table, the explain cook also gets the PDF path, so it can read the table rows by position.
 
 The comparison: the browser sends 2 or 3 paper paths. For each paper we collect
 what is already saved (summary, difficulty score, roadmap). comparer.py (the cook)
@@ -61,7 +65,8 @@ FUNCTION GUIDE
    api_chat                answer a question about the paper
    api_chat_history        the saved chat
    api_prerequisites       learning roadmap for this user
-   api_explain             explain a term (and save it to Memory)
+   api_explain             explain a term, formula or table (saved answers)
+   api_known_terms_add     save a term to Memory (the Save button)
    api_known_terms         list the terms the user learned (Memory)
    api_known_terms_delete / api_known_terms_delete_all   forget terms
    mask_key                hide most of an API key
@@ -114,7 +119,7 @@ from prerequisite_extractor import extract_prerequisites
 from qa_engine import answer_question
 from retriever import retrieve_relevant_chunks
 from summarizer import cut_references, summarize_paper
-from term_explainer import explain_term
+from term_explainer import explain_term, term_key
 
 
 # ---------------------------------------------------------------
@@ -663,7 +668,7 @@ def api_prerequisites():
 
 
 # ---------------------------------------------------------------
-# ROUTES: explain a term
+# ROUTES: explain a term, a formula or a table
 # ---------------------------------------------------------------
 @app.post("/api/explain")
 @login_required
@@ -674,13 +679,31 @@ def api_explain():
         return jsonify({"error": "term is required."}), 400
 
     pdf_path = pdf_from_request(data)
-    api_key = get_api_key()
     name = collection_name_from_path(pdf_path)
-    chunks = retrieve_relevant_chunks(term, collection_name=name, top_k=5)
-    result = explain_term(term, chunks, api_key, clean_title(pdf_path))
 
-    add_known_term(session["user_id"], term)     # Memory: the user has now learned this term
+    # a saved answer needs no Gemini call at all (this saves tokens)
+    cache_name = name + "_" + term_key(term)
+    result = cache_get("explain", cache_name)
+    if result is None:
+        # the PDF path is given too, so a table can be read row by row from the page
+        result = explain_term(term, name, get_api_key(), clean_title(pdf_path), str(pdf_path))
+        cache_set("explain", cache_name, result)
+
+    # Memory is now a BUTTON. Only a real concept term can be saved.
+    result["can_save"] = result["kind"] == "term" and result.get("is_concept", True)
+    already = result["term"].strip().lower() in get_known_terms_set(session["user_id"])
+    result["saved_to_memory"] = result["can_save"] and already
     return jsonify(result)
+
+
+@app.post("/api/known-terms/add")
+@login_required
+def api_known_terms_add():
+    term = (read_body().get("term") or "").strip()
+    if not term:
+        return jsonify({"error": "term is required."}), 400
+    add_known_term(session["user_id"], term)
+    return jsonify({"saved": True, "term": term})
 
 
 # ---------------------------------------------------------------
